@@ -30,6 +30,15 @@ export class DataStack extends Stack {
       gatewayEndpoints: { S3: { service: ec2.GatewayVpcEndpointAwsService.S3 } },
     });
 
+    // Diagnostics (2026-11-06): record every connection attempt from the Lambdas, to see
+    // whether a hanging request is trying to reach the internet (this VPC has no egress).
+    this.vpc.addFlowLog("FlowLog", {
+      trafficType: ec2.FlowLogTrafficType.ALL,
+      destination: ec2.FlowLogDestination.toCloudWatchLogs(
+        new logs.LogGroup(this, "FlowLogs", { retention: logs.RetentionDays.ONE_WEEK, removalPolicy: RemovalPolicy.DESTROY })),
+      maxAggregationInterval: ec2.FlowLogMaxAggregationInterval.ONE_MINUTE,
+    });
+
     this.fileSystem = new efs.FileSystem(this, "Data", {
       vpc: this.vpc,
       vpcSubnets: isolated,
@@ -76,6 +85,7 @@ export class DataStack extends Stack {
     transfer.grantReadWrite(migrate);
     transfer.grantDelete(migrate);
 
+    new CfnOutput(this, "VpcId", { value: this.vpc.vpcId });
     new CfnOutput(this, "FileSystemId", { value: this.fileSystem.fileSystemId });
     new CfnOutput(this, "FileSystemArn", { value: this.fileSystem.fileSystemArn });
     new CfnOutput(this, "TransferBucket", { value: transfer.bucketName });

@@ -58,7 +58,7 @@ export class VaultStack extends Stack {
         ICON_SERVICE: "internal",
         ENABLE_DB_WAL: "false", // SQLite WAL is unsafe on network filesystems
         IP_HEADER: "X-Forwarded-For",
-        LOG_LEVEL: "info", // diagnostics: account creation hung (2026-11-06); back to "warn" once explained
+        LOG_LEVEL: "debug", // diagnostics: some logins hang until timeout (2026-11-06); back to "warn" once explained
         // No ADMIN_TOKEN => /admin is disabled.
       },
     });
