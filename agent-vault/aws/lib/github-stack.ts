@@ -4,6 +4,8 @@ import * as iam from "aws-cdk-lib/aws-iam";
 
 export interface GithubStackProps extends StackProps {
   repo: string;               // "nyo-solutions/agent-vault"
+  /** OIDC sub prefix GitHub actually sends, e.g. "repo:org@123/repo@456" when the repo uses immutable subjects. */
+  subPrefix?: string;
   existingProviderArn?: string; // reuse an account-wide GitHub OIDC provider if one exists
 }
 
@@ -19,8 +21,8 @@ export class GithubStack extends Stack {
       roleName: "agent-vault-github",
       maxSessionDuration: Duration.hours(1),
       assumedBy: new iam.WebIdentityPrincipal(provider.openIdConnectProviderArn, {
-        StringEquals: { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
-        StringLike: { "token.actions.githubusercontent.com:sub": `repo:${props.repo}:ref:refs/heads/main` },
+        StringEquals: { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                        "token.actions.githubusercontent.com:sub": `${props.subPrefix ?? `repo:${props.repo}`}:ref:refs/heads/main` },
       }),
     });
 

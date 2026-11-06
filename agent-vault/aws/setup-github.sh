@@ -9,7 +9,10 @@ REPO=nyo-solutions/agent-vault
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
 ./bootstrap.sh
 PROVIDER=$(aws iam list-open-id-connect-providers --query "OpenIDConnectProviderList[?ends_with(Arn, 'token.actions.githubusercontent.com')].Arn | [0]" --output text | grep -v '^None$' || true)
-CTX=(-c githubRepo="$REPO"); [ -n "$PROVIDER" ] && { echo "Reusing GitHub OIDC provider $PROVIDER"; CTX+=(-c oidcProviderArn="$PROVIDER"); }
+# GitHub may send an immutable subject (repo:org@id/repo@id); trust exactly what it sends.
+SUB=$(gh api "repos/$REPO/actions/oidc/customization/sub" --jq 'if .use_immutable_subject then .sub_claim_prefix else empty end' 2>/dev/null || true)
+SUB=${SUB:-repo:$REPO}; echo "GitHub OIDC subject: $SUB:ref:refs/heads/main"
+CTX=(-c githubRepo="$REPO" -c githubSubPrefix="$SUB"); [ -n "$PROVIDER" ] && { echo "Reusing GitHub OIDC provider $PROVIDER"; CTX+=(-c oidcProviderArn="$PROVIDER"); }
 CDK_DEFAULT_ACCOUNT=$ACCOUNT npx cdk deploy AgentVaultGithub "${CTX[@]}"
 ROLE=$(out AgentVaultGithub RoleArn)
 gh variable set AWS_ROLE_ARN --repo "$REPO" --body "$ROLE"

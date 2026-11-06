@@ -28,5 +28,6 @@ new GithubStack(app, "AgentVaultGithub", {
   env,
   description: "agent-vault: GitHub Actions OIDC deploy role",
   repo: app.node.tryGetContext("githubRepo") ?? "nyo-solutions/agent-vault",
+  subPrefix: app.node.tryGetContext("githubSubPrefix") || undefined,
   existingProviderArn: app.node.tryGetContext("oidcProviderArn") || undefined,
 });
