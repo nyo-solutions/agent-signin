@@ -53,16 +53,24 @@ else
       echo "             [2] email + master password (+ two-factor)"
       read -rp "Choice [1]: " how
       if [ "${how:-1}" = "1" ]; then
-        read -rp "client_id: " cid
-        read -rsp "client_secret: " csec; echo
+        cid=""; csec=""
+        while [ -z "$cid" ]; do read -rp "client_id: " cid; cid=$(printf '%s' "$cid" | tr -d '[:space:]'); done
+        while [ -z "$csec" ]; do read -rsp "client_secret (hidden): " csec; echo; csec=$(printf '%s' "$csec" | tr -d '[:space:]')
+          [ -n "$csec" ] || echo "Empty - paste the client_secret and press Enter."; done
+        echo "Got client_id (${#cid} chars) and client_secret (${#csec} chars)."
         kc_put "$KC_CLIENTID" "Bitwarden API key client_id (agent-vault)" "$cid"
         kc_put "$KC_CLIENTSECRET" "Bitwarden API key client_secret (agent-vault)" "$csec"
         echo "API key stored in Keychain."
       fi
     fi
     if [ -n "$cid" ] && [ -n "$csec" ]; then
-      BW_CLIENTID="$cid" BW_CLIENTSECRET="$csec" "$BW_BIN" login --apikey >/dev/null
-      echo "Logged in with API key."
+      if BW_CLIENTID="$cid" BW_CLIENTSECRET="$csec" "$BW_BIN" login --apikey >/dev/null; then
+        echo "Logged in with API key."
+      else
+        security delete-generic-password -s "$KC_CLIENTID" -a "$USER" >/dev/null 2>&1 || true
+        security delete-generic-password -s "$KC_CLIENTSECRET" -a "$USER" >/dev/null 2>&1 || true
+        echo "API key login failed; removed the saved key. Run this script again and re-enter it." >&2; exit 1
+      fi
     else
       read -rp "Vaultwarden account email: " email
       "$BW_BIN" login "$email"   # interactive: master password + two-factor prompts
