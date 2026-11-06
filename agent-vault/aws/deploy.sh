@@ -8,6 +8,7 @@ ZID=$(zone_id); [ -n "$ZID" ] && [ "$ZID" != "None" ] || { echo "No public hoste
 echo "AWS account: $ACCOUNT  region: $AWS_REGION  zone: $ZID"
 docker info >/dev/null 2>&1 || { echo "Docker must be running (the Lambda image is built locally)." >&2; exit 1; }
 ./bootstrap.sh
+./scripts/extract-web-vault.sh
 CTX=(-c zoneId="$ZID"); [ -n "${1:-}" ] && CTX+=(-c alertEmail="$1")
 CDK_DEFAULT_ACCOUNT=$ACCOUNT npx cdk deploy AgentVaultData AgentVault "${CTX[@]}"
 URL=$(out AgentVault Url)

@@ -11,6 +11,11 @@ import * as apigw from "aws-cdk-lib/aws-apigatewayv2";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import * as budgets from "aws-cdk-lib/aws-budgets";
 import { Platform } from "aws-cdk-lib/aws-ecr-assets";
+import * as fs from "fs";
+import * as s3 from "aws-cdk-lib/aws-s3";
+import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
+import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
+import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import { DataStack } from "./data-stack";
 
 export interface VaultStackProps extends StackProps {
@@ -22,7 +27,11 @@ export interface VaultStackProps extends StackProps {
   signups?: boolean;
 }
 
-/** The public, stateless part: Vaultwarden on Lambda + HTTPS endpoint. Safe to destroy/recreate. */
+/**
+ * The public, stateless part. Safe to destroy/recreate.
+ * CloudFront (custom domain) -> *.js / *.wasm from S3 (web vault files exceed Lambda's 6 MB response limit)
+ *                            -> everything else to API Gateway (throttled) -> Vaultwarden Lambda.
+ */
 export class VaultStack extends Stack {
   constructor(scope: Construct, id: string, props: VaultStackProps) {
     super(scope, id, props);
@@ -56,10 +65,8 @@ export class VaultStack extends Stack {
 
     const zone = route53.HostedZone.fromHostedZoneAttributes(this, "Zone", { hostedZoneId: zoneId, zoneName });
     const certificate = new acm.Certificate(this, "Cert", { domainName, validation: acm.CertificateValidation.fromDns(zone) });
-    const domain = new apigw.DomainName(this, "Domain", { domainName, certificate });
     const api = new apigw.HttpApi(this, "Api", {
       createDefaultStage: false,
-      disableExecuteApiEndpoint: true,
       defaultIntegration: new HttpLambdaIntegration("VaultwardenIntegration", vaultwarden),
     });
     new apigw.HttpStage(this, "Stage", {
@@ -67,12 +74,64 @@ export class VaultStack extends Stack {
       stageName: "$default",
       autoDeploy: true,
       throttle: { rateLimit: 20, burstLimit: 50 }, // caps abuse and cost
-      domainMapping: { domainName: domain },
     });
+
+    // Static web vault files, extracted from the same image by scripts/extract-web-vault.sh.
+    const webDir = path.join(__dirname, "../build/web-vault");
+    if (!fs.existsSync(path.join(webDir, "index.html"))) {
+      throw new Error("build/web-vault missing: run scripts/extract-web-vault.sh before synth/deploy");
+    }
+    const web = new s3.Bucket(this, "WebVault", {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      removalPolicy: RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+    });
+    const staticBehavior: cloudfront.BehaviorOptions = {
+      origin: origins.S3BucketOrigin.withOriginAccessControl(web),
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      cachePolicy: cloudfront.CachePolicy.CACHING_OPTIMIZED,
+      compress: true,
+    };
+    const distribution = new cloudfront.Distribution(this, "Cdn", {
+      domainNames: [domainName],
+      certificate,
+      priceClass: cloudfront.PriceClass.PRICE_CLASS_100,
+      httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
+      defaultBehavior: {
+        origin: new origins.HttpOrigin(`${api.apiId}.execute-api.${this.region}.amazonaws.com`),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+        compress: true,
+      },
+      additionalBehaviors: { "*.js": staticBehavior, "*.wasm": staticBehavior },
+    });
+    new s3deploy.BucketDeployment(this, "WebVaultFiles", {
+      sources: [s3deploy.Source.asset(webDir)],
+      destinationBucket: web,
+      exclude: ["*.wasm"],
+      prune: false,
+      memoryLimit: 1024,
+      distribution,
+      distributionPaths: ["/*"],
+    });
+    new s3deploy.BucketDeployment(this, "WebVaultWasm", {
+      sources: [s3deploy.Source.asset(webDir)],
+      destinationBucket: web,
+      exclude: ["*"],
+      include: ["*.wasm"],
+      contentType: "application/wasm",
+      prune: false,
+      memoryLimit: 1024,
+    });
+
     new route53.ARecord(this, "AliasA", {
       zone,
       recordName: domainName,
-      target: route53.RecordTarget.fromAlias(new targets.ApiGatewayv2DomainProperties(domain.regionalDomainName, domain.regionalHostedZoneId)),
+      target: route53.RecordTarget.fromAlias(new targets.CloudFrontTarget(distribution)),
     });
 
     if (alertEmail) {
@@ -87,5 +146,6 @@ export class VaultStack extends Stack {
 
     new CfnOutput(this, "Url", { value: `https://${domainName}` });
     new CfnOutput(this, "VaultwardenFunction", { value: vaultwarden.functionName });
+    new CfnOutput(this, "DistributionId", { value: distribution.distributionId });
   }
 }

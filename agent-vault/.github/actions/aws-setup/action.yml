@@ -20,3 +20,7 @@ runs:
       shell: bash
       working-directory: aws
       run: npm ci --no-audit --no-fund
+    - name: Extract web vault files from the pinned image
+      shell: bash
+      working-directory: aws
+      run: ./scripts/extract-web-vault.sh

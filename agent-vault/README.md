@@ -29,7 +29,7 @@ of this repo) — no AWS keys are stored in GitHub.
 | Stack | Contents | Destroyed by |
 |---|---|---|
 | `AgentVaultData` | VPC (no NAT/egress), EFS (encrypted, retained), backups, transfer bucket, migrate/backup function | Remove vault only |
-| `AgentVault` | Vaultwarden Lambda (Web Adapter, arm64), HTTP API (throttled 20 rps), ACM cert, Route 53 record, optional $5 budget | Take offline / Remove vault |
+| `AgentVault` | CloudFront (custom domain) → S3 for the web vault's `*.js`/`*.wasm` (too big for Lambda's 6 MB limit) and → HTTP API (throttled 20 rps) → Vaultwarden Lambda (Web Adapter, arm64) for everything else; ACM cert, Route 53 record, optional $5 budget | Take offline / Remove vault |
 | `AgentVaultGithub` | GitHub OIDC provider + deploy role | manual (`npx cdk destroy AgentVaultGithub`) |
 
 ## One-time setup (from your Mac, needs admin AWS credentials)
