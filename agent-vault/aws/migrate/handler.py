@@ -3,6 +3,7 @@
 Events:
   {"action": "status"}                       -> list files on EFS
   {"action": "import", "key": "<s3 key>", "keep": false} -> replace EFS contents with tarball (deleted unless keep)
+  {"action": "stats"}                        -> row counts (read-only)
   {"action": "export"}                       -> consistent tarball of EFS -> s3 exports/<ts>.tar.gz
 """
 import os, shutil, sqlite3, tarfile, time
@@ -84,12 +85,22 @@ def _export():
     return {"exported": key}
 
 
+def _stats():
+    conn = sqlite3.connect(f"file:{os.path.join(DATA, 'db.sqlite3')}?mode=ro", uri=True, timeout=10)
+    out = {t: conn.execute(f"select count(*) from {t}").fetchone()[0] for t in ("users", "ciphers", "devices")}
+    out["journal_mode"] = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    conn.close()
+    return out
+
+
 def handler(event, _ctx):
     action = (event or {}).get("action", "status")
     if action == "status":
         return _status()
     if action == "import":
         return _import(event["key"], bool(event.get("keep")))
+    if action == "stats":
+        return _stats()
     if action == "export":
         return _export()
     raise ValueError(f"unknown action {action}")

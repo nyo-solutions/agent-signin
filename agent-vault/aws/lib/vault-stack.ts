@@ -40,7 +40,7 @@ export class VaultStack extends Stack {
     const vaultwarden = new lambda.DockerImageFunction(this, "Vaultwarden", {
       code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, "../image"), { platform: Platform.LINUX_ARM64 }),
       architecture: lambda.Architecture.ARM_64,
-      memorySize: 512,
+      memorySize: 1024, // more CPU: shorter request windows on the shared SQLite file
       timeout: Duration.seconds(29),
       vpc: data.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
@@ -58,7 +58,13 @@ export class VaultStack extends Stack {
         ICON_SERVICE: "internal",
         ENABLE_DB_WAL: "false", // SQLite WAL is unsafe on network filesystems
         IP_HEADER: "X-Forwarded-For",
-        LOG_LEVEL: "warn",
+        LOG_LEVEL: "info", // TODO: back to "warn" once account creation is confirmed working
+        // Lambda pauses instances between requests. Background jobs could be paused mid-transaction
+        // and hold a lock on the shared SQLite file (EFS), blocking other instances. Disable them,
+        // keep one DB connection per instance, and fail fast instead of hanging until the timeout.
+        JOB_POLL_INTERVAL_MS: "0",
+        DATABASE_MAX_CONNS: "1",
+        DATABASE_TIMEOUT: "10",
         // No ADMIN_TOKEN => /admin is disabled.
       },
     });
