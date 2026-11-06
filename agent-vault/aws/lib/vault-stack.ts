@@ -67,6 +67,7 @@ export class VaultStack extends Stack {
     const certificate = new acm.Certificate(this, "Cert", { domainName, validation: acm.CertificateValidation.fromDns(zone) });
     const api = new apigw.HttpApi(this, "Api", {
       createDefaultStage: false,
+      disableExecuteApiEndpoint: false, // CloudFront's origin (must be explicit: it was true before)
       defaultIntegration: new HttpLambdaIntegration("VaultwardenIntegration", vaultwarden),
     });
     new apigw.HttpStage(this, "Stage", {
