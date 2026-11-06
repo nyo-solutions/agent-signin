@@ -12,7 +12,7 @@ official [`@bitwarden/mcp-server`](https://www.npmjs.com/package/@bitwarden/mcp-
 
 | Workflow | When | What |
 |---|---|---|
-| **Deploy** | automatically on push to `main` touching `aws/`, or manually | builds the image, deploys `AgentVaultData` + `AgentVault`, smoke-tests the URL |
+| **Deploy** | automatically on push to `main` touching `aws/`, or manually | builds the image, deploys `AgentVaultData` + `AgentVault`, smoke-tests the URL. Tick **signups** to allow creating an account, then run it again unticked |
 | **Backup** | Sundays 03:00 UTC, or manually | consistent export to the transfer bucket (`exports/`, kept 30 days) |
 | **Restore backup** | manually (type `restore`) | safety export, then replaces vault data with a chosen export |
 | **Take vault offline (keep data)** | manually (type `destroy`) | backup, then removes the public endpoint/Lambda/cert/DNS. Data stays; **Deploy** brings it back |

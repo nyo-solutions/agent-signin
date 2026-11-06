@@ -5,6 +5,11 @@ on:
     branches: [main]
     paths: ["aws/**", ".github/workflows/deploy.yml", ".github/actions/**"]
   workflow_dispatch:
+    inputs:
+      signups:
+        description: "Allow new accounts (open briefly to create an account, then redeploy without it)"
+        type: boolean
+        default: false
 permissions: { id-token: write, contents: read }
 concurrency: { group: agent-vault-aws, cancel-in-progress: false }
 jobs:
@@ -17,9 +22,10 @@ jobs:
         with: { role-arn: "${{ vars.AWS_ROLE_ARN }}", zone-id: "${{ vars.AWS_ZONE_ID }}" }
       - uses: docker/setup-qemu-action@v3   # image is linux/arm64
       - name: cdk deploy
-        env: { ZONE_ID: "${{ vars.AWS_ZONE_ID }}", ALERT_EMAIL: "${{ vars.ALERT_EMAIL }}" }
+        env: { ZONE_ID: "${{ vars.AWS_ZONE_ID }}", ALERT_EMAIL: "${{ vars.ALERT_EMAIL }}", SIGNUPS: "${{ inputs.signups && 'true' || 'false' }}" }
         run: |
-          ctx=(-c zoneId="$ZONE_ID"); [ -n "$ALERT_EMAIL" ] && ctx+=(-c alertEmail="$ALERT_EMAIL")
+          ctx=(-c zoneId="$ZONE_ID" -c signups="$SIGNUPS"); [ -n "$ALERT_EMAIL" ] && ctx+=(-c alertEmail="$ALERT_EMAIL")
+          echo "Signups: $SIGNUPS" | tee -a "$GITHUB_STEP_SUMMARY"
           npx cdk deploy AgentVaultData AgentVault "${ctx[@]}" --require-approval never
       - name: Smoke test
         run: |
