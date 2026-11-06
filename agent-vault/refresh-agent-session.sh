@@ -20,9 +20,9 @@ if [ "$VW_TARGET" = "local" ]; then
   fi
   docker inspect vaultwarden >/dev/null 2>&1 || "$AV_HOME/bin/vaultwarden-up.sh"
   docker start vaultwarden >/dev/null
-  for _ in $(seq 1 30); do curl -fs --resolve $VW_HOST:443:$VW_IP "${CURL_TLS[@]}" "$VW_URL/alive" >/dev/null && break; sleep 1; done
+  for _ in $(seq 1 30); do curl -fs --resolve $VW_HOST:443:$VW_IP ${CURL_TLS[@]+"${CURL_TLS[@]}"} "$VW_URL/alive" >/dev/null && break; sleep 1; done
 fi
-if ! curl -fs --max-time 20 "${CURL_TLS[@]}" "$VW_URL/alive" >/dev/null 2>&1; then
+if ! curl -fs --max-time 20 ${CURL_TLS[@]+"${CURL_TLS[@]}"} "$VW_URL/alive" >/dev/null 2>&1; then
   if [ "$VW_TARGET" = "local" ] && ! dscacheutil -q host -a name "$VW_HOST" | grep -q ip_address; then
     echo "$VW_HOST does not resolve. Run first: $AV_HOME/install-hostname-and-ca.sh" >&2
   else
