@@ -1,0 +1,38 @@
+name: Restore backup
+# Replace the vault's data with an export from the transfer bucket (see the Backup workflow output).
+on:
+  workflow_dispatch:
+    inputs:
+      key: { description: "S3 key, e.g. exports/vault-20261106-030000.tar.gz", required: true }
+      confirm: { description: 'Type "restore" to overwrite the current vault data', required: true }
+permissions: { id-token: write, contents: read }
+concurrency: { group: agent-vault-aws, cancel-in-progress: false }
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: aws } }
+    steps:
+      - name: Check confirmation
+        if: inputs.confirm != 'restore'
+        run: |
+          echo "::error::Confirmation text must be exactly: restore"
+          exit 1
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/aws-setup
+        with: { role-arn: "${{ vars.AWS_ROLE_ARN }}", zone-id: "${{ vars.AWS_ZONE_ID }}" }
+      - name: Safety backup, then import
+        env: { KEY: "${{ inputs.key }}" }
+        run: |
+          source lib.sh; FN=$(out AgentVaultData MigrateFunction); VW=$(out AgentVault VaultwardenFunction)
+          [[ "$KEY" =~ ^exports/[A-Za-z0-9._-]+\.tar\.gz$ ]] || { echo "::error::key must look like exports/<name>.tar.gz"; exit 1; }
+          aws lambda invoke --function-name "$FN" --cli-binary-format raw-in-base64-out --payload '{"action":"export"}' pre.json >/dev/null
+          echo "Pre-restore backup: $(jq -r .exported pre.json)" | tee -a "$GITHUB_STEP_SUMMARY"
+          # import deletes its source object, so restore from a copy
+          aws lambda invoke --function-name "$FN" --cli-binary-format raw-in-base64-out \
+            --payload "{\"action\":\"import\",\"key\":\"$KEY\",\"keep\":true}" out.json >/dev/null
+          if jq -e .errorMessage out.json >/dev/null; then jq . out.json; exit 1; fi
+          jq '{users, items, integrity}' out.json | tee -a "$GITHUB_STEP_SUMMARY"
+          [ -n "$VW" ] && {
+            ENV=$(aws lambda get-function-configuration --function-name "$VW" --query Environment.Variables --output json | jq -c --arg t "$(date +%s)" '{Variables: (. + {RESTORED_AT: $t})}')
+            aws lambda update-function-configuration --function-name "$VW" --environment "$ENV" >/dev/null
+            aws lambda wait function-updated --function-name "$VW"; }

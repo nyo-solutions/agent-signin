@@ -1,0 +1,11 @@
+# build / deploy artifacts
+aws/node_modules/
+aws/cdk.out/
+aws/outputs.json
+aws/cdk.context.json
+__pycache__/
+# machine-local state
+target
+bin/vault-touchid
+*.bak-*
+.DS_Store

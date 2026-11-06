@@ -1,0 +1,23 @@
+name: Backup
+# Consistent export of the vault to the transfer bucket (exports/, kept 30 days).
+# On top of the automatic daily AWS Backup snapshots of EFS (kept 35 days).
+on:
+  schedule: [{ cron: "0 3 * * 0" }]   # Sundays 03:00 UTC
+  workflow_dispatch:
+permissions: { id-token: write, contents: read }
+concurrency: { group: agent-vault-aws, cancel-in-progress: false }
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: aws } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/aws-setup
+        with: { role-arn: "${{ vars.AWS_ROLE_ARN }}", zone-id: "${{ vars.AWS_ZONE_ID }}" }
+      - name: Export
+        run: |
+          source lib.sh; FN=$(out AgentVaultData MigrateFunction)
+          [ -n "$FN" ] || { echo "::warning::AgentVaultData not deployed; nothing to back up"; exit 0; }
+          aws lambda invoke --function-name "$FN" --cli-binary-format raw-in-base64-out --payload '{"action":"export"}' out.json >/dev/null
+          if jq -e .errorMessage out.json >/dev/null; then jq . out.json; exit 1; fi
+          echo "Backup: s3://$(out AgentVaultData TransferBucket)/$(jq -r .exported out.json)" | tee -a "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,28 @@
+name: Deploy
+# Builds the Lambda image and deploys AgentVaultData + AgentVault. Runs on changes to aws/ or manually.
+on:
+  push:
+    branches: [main]
+    paths: ["aws/**", ".github/workflows/deploy.yml", ".github/actions/**"]
+  workflow_dispatch:
+permissions: { id-token: write, contents: read }
+concurrency: { group: agent-vault-aws, cancel-in-progress: false }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: aws } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/aws-setup
+        with: { role-arn: "${{ vars.AWS_ROLE_ARN }}", zone-id: "${{ vars.AWS_ZONE_ID }}" }
+      - uses: docker/setup-qemu-action@v3   # image is linux/arm64
+      - name: cdk deploy
+        env: { ZONE_ID: "${{ vars.AWS_ZONE_ID }}", ALERT_EMAIL: "${{ vars.ALERT_EMAIL }}" }
+        run: |
+          ctx=(-c zoneId="$ZONE_ID"); [ -n "$ALERT_EMAIL" ] && ctx+=(-c alertEmail="$ALERT_EMAIL")
+          npx cdk deploy AgentVaultData AgentVault "${ctx[@]}" --require-approval never
+      - name: Smoke test
+        run: |
+          source lib.sh; URL=$(out AgentVault Url)
+          for _ in $(seq 1 20); do curl -fs --max-time 15 "$URL/alive" >/dev/null && { echo "$URL is live"; exit 0; }; sleep 15; done
+          echo "::error::$URL did not answer"; exit 1
