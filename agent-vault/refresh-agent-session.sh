@@ -3,7 +3,7 @@
 #  1. local target: makes sure Docker + Vaultwarden are up; aws: checks it answers
 #  2. logs bw in (API key from Keychain, or email+password) and unlocks it
 #     (master password via Touch ID if saved, else typed)
-#  3. stores BW_SESSION in the macOS login Keychain (read by bin/bitwarden-mcp)
+#  3. stores BW_SESSION in the macOS login Keychain (read by agent-autofill)
 #  4. re-applies the Claude Desktop / Claude Code MCP config (idempotent)
 # Flags: --test  also create/verify the "Test Automation" TOTP item
 set -euo pipefail

@@ -1,8 +1,10 @@
 # agent-vault
 
 Self-hosted [Vaultwarden](https://github.com/dani-garcia/vaultwarden) for you and your AI agents.
-Agents (Claude Desktop, Claude Code) read usernames, passwords and live TOTP codes through the
-official [`@bitwarden/mcp-server`](https://www.npmjs.com/package/@bitwarden/mcp-server).
+Agents (Claude Desktop, Claude Code) sign in through [agent-autofill](https://github.com/nyo-solutions/agent-autofill)
+(`~/projects/agent-autofill`): it fills approved logins from the `ai` folder straight into the browser, so agents
+never receive passwords or TOTP codes. The official `@bitwarden/mcp-server` is no longer registered, because it
+returned plaintext secrets to the agent.
 
 - **Vault:** https://vault.example.com — AWS Lambda + EFS in us-east-1, ~$0–1/month
 - **Clients:** Bitwarden browser extension, desktop app, Android app → "Self-hosted" → the URL above
@@ -61,9 +63,8 @@ These stay local on purpose: they need your master password, Touch ID, your Mac'
 |---|---|
 | `env.sh` | shared settings; `target` file picks `local` or `aws` (written by `migrate.sh`) |
 | `refresh-agent-session.sh` | login (API key) + unlock (Touch ID) → `BW_SESSION` into Keychain |
-| `bin/bitwarden-mcp` | MCP launcher used by Claude Desktop / Claude Code; reads the session from Keychain |
 | `bin/vault-touchid` (built from `touchid/`) | master password in Keychain, readable only by this binary after Touch ID |
-| `configure-mcp-clients.py` | idempotently registers the MCP server in Claude Desktop and Claude Code |
+| `configure-mcp-clients.py` | idempotently registers agent-autofill in Claude Desktop and Claude Code and removes the retired `bitwarden` server |
 | `bin/vaultwarden-watchdog.sh` + `launchd/` | every 5 min: keeps the local container up and re-asserts MCP config |
 | `bin/vaultwarden-up.sh`, `install-hostname-and-ca.sh` | the original local Docker vault at https://passman.internal |
 

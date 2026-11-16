@@ -1,8 +1,7 @@
 # Shared settings for agent-vault scripts (sourced, not executed).
 AV_HOME="$HOME/projects/agent-vault"
 BW_BIN="/opt/homebrew/bin/bw"
-MCP_PKG="@bitwarden/mcp-server@2026.7.0"   # pinned; bump deliberately
-KC_SERVICE="agent-vault-bw-session"         # BW_SESSION (read by bin/bitwarden-mcp)
+KC_SERVICE="agent-vault-bw-session"         # BW_SESSION (read by agent-autofill)
 KC_CLIENTID="agent-vault-bw-clientid"       # Bitwarden personal API key (machine login)
 KC_CLIENTSECRET="agent-vault-bw-clientsecret"
 TOUCHID="$AV_HOME/bin/vault-touchid"        # master password behind Touch ID
