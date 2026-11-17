@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { findGrant, originMatches, parsePattern } from '../src/policy.js';
 import { totp } from '../src/totp.js';
+import { generatePassword } from '../src/password.js';
 
 test('origin patterns', () => {
   const t = (p, o) => originMatches(p, o);
@@ -42,4 +43,24 @@ test('totp RFC 6238 vector', () => {
   const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
   assert.equal(totp(secret, 59_000), '287082');
   assert.equal(totp(`otpauth://totp/x?secret=${secret}&digits=8`, 59_000), '94287082');
+});
+
+test('generated passwords', () => {
+  for (let i = 0; i < 200; i++) {
+    const p = generatePassword();
+    assert.equal(p.length, 20);
+    assert.match(p, /[a-z]/); assert.match(p, /[A-Z]/); assert.match(p, /[0-9]/); assert.match(p, /[!@#$%^&*\-_=+?]/);
+  }
+  assert.doesNotMatch(generatePassword({ symbols: false, length: 30 }), /[^a-zA-Z0-9]/);
+  assert.equal(generatePassword({ length: 4 }).length, 12, 'minimum length enforced');
+  assert.match(generatePassword({ symbol_set: '#' }), /#/);
+});
+
+test('signup grants are separate from login grants', async () => {
+  const { findGrant: fg } = await import('../src/policy.js');
+  const policy = { grants: [{ vault: 'v', item: 'x', origins: ['*'] }, { kind: 'signup', vault: 'v', item: 'id1', origins: ['https://a.test'] }] };
+  assert.ok(fg(policy, { vault: 'v', itemId: 'x', origin: 'https://a.test' }));
+  assert.ok(!fg(policy, { vault: 'v', itemId: 'x', origin: 'https://a.test', kind: 'signup' }));
+  assert.ok(fg(policy, { vault: 'v', itemId: 'id1', origin: 'https://a.test', kind: 'signup' }));
+  assert.ok(!fg(policy, { vault: 'v', itemId: 'id1', origin: 'https://a.test' }));
 });

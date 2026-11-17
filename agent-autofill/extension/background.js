@@ -56,7 +56,7 @@ async function handle(msg) {
         target: { tabId: msg.tab_id },
         world: 'ISOLATED',
         func: fillPage,
-        args: [{ expectedOrigin: msg.expected_origin, fields: msg.fields, submit: msg.submit }],
+        args: [{ expectedOrigin: msg.expected_origin, fields: msg.fields, submit: msg.submit, mode: msg.mode || 'login' }],
       });
       if (!res || res.result == null) throw new Error('fill script did not run in the page');
       return res.result;

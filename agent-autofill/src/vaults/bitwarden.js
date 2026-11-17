@@ -2,7 +2,9 @@
 // from BW_SESSION or the macOS Keychain (agent-vault stores it there).
 import { execFile } from 'node:child_process';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
 import { promisify } from 'node:util';
+import { IDENTITY_FIELDS, fromBitwarden } from './identity-fields.js';
 
 const run = promisify(execFile);
 
@@ -53,11 +55,33 @@ export function create(cfg) {
     return folderId;
   }
 
-  async function rawItems() {
+  async function allItems(force) {
+    if (force) synced = 0;
     await sync();
     const fid = await resolveFolder();
     const items = JSON.parse(await bwJson(['list', 'items', ...(fid ? ['--folderid', fid] : [])]));
-    return items.filter((i) => i.type === 1 && !i.deletedDate);
+    return items.filter((i) => !i.deletedDate);
+  }
+  const rawItems = async () => (await allItems()).filter((i) => i.type === 1);
+  const rawIdentities = async () => (await allItems()).filter((i) => i.type === 4);
+
+  // `bw create item` reads base64 JSON from stdin, so the new password never
+  // appears in a process argument list.
+  function bwCreate(obj) {
+    return new Promise(async (resolve, reject) => {
+      let env;
+      try { env = { ...process.env, BW_SESSION: await getSession(), BW_NOINTERACTION: 'true' }; } catch (e) { return reject(e); }
+      const p = spawn(bw, ['create', 'item', '--nointeraction'], { env });
+      let out = '', err = '';
+      p.stdout.on('data', (d) => (out += d));
+      p.stderr.on('data', (d) => (err += d));
+      p.on('error', reject);
+      p.on('close', (code) => {
+        if (code !== 0) return reject(new Error(`bitwarden: bw create item failed: ${err.split('\n')[0]}`));
+        try { const r = JSON.parse(out); resolve({ id: r.id, name: r.name }); } catch { reject(new Error('bitwarden: unexpected output from bw create item')); }
+      });
+      p.stdin.end(Buffer.from(JSON.stringify(obj)).toString('base64'));
+    });
   }
 
   return {
@@ -77,6 +101,30 @@ export function create(cfg) {
     async find(ref) {
       const all = await this.list();
       return all.find((i) => i.id === ref) || all.find((i) => i.name === ref);
+    },
+    async listIdentities() {
+      return (await rawIdentities()).map((i) => {
+        const vals = fromBitwarden(i.identity);
+        return { id: i.id, name: i.name, has: IDENTITY_FIELDS.filter((f) => vals[f]) };
+      });
+    },
+    async findIdentity(ref) {
+      const all = await this.listIdentities();
+      return all.find((i) => i.id === ref) || all.find((i) => i.name === ref);
+    },
+    async identity(id) {
+      const item = (await rawIdentities()).find((i) => i.id === id);
+      if (!item) throw new Error('bitwarden: identity not found in the configured scope');
+      return fromBitwarden(item.identity);
+    },
+    async createLogin({ name, username, password, uris, notes }) {
+      const folderId = (await resolveFolder()) ?? null;
+      const created = await bwCreate({
+        type: 1, name, notes, folderId, favorite: false, reprompt: 0,
+        login: { username, password, totp: null, uris: uris.map((uri) => ({ uri, match: null })) },
+      });
+      synced = 0; // make the new item visible to the next list()
+      return created;
     },
     async secrets(id, kinds) {
       const item = (await rawItems()).find((i) => i.id === id); // re-checks the folder scope

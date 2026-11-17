@@ -19,7 +19,7 @@ export function loadPolicy(file = POLICY_PATH) {
 
 export function savePolicy(policy, file = POLICY_PATH) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const header = '# agent-autofill allow-list. Approvals are added by the request_authorization dialog\n# or `agent-autofill allow`. Origin wildcards: "*" any site, "https://*" any HTTPS site,\n# "https://*.example.com" domain + subdomains, "http://localhost:*" any port. item "*" = every item in the vault folder.\n';
+  const header = '# agent-autofill allow-list. Approvals are added by the request_authorization dialog\n# or `agent-autofill allow`. Origin wildcards: "*" any site, "https://*" any HTTPS site,\n# "https://*.example.com" domain + subdomains, "http://localhost:*" any port. item "*" = every item in the vault folder.\n# kind: signup grants let fill_signup use an identity (item) on those sites.\n';
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, header + YAML.stringify(policy), { mode: 0o600 });
   fs.renameSync(tmp, file);
@@ -71,20 +71,23 @@ export function isWildcard(pattern) {
 
 const live = (g, now) => !g.expires_at || new Date(g.expires_at).getTime() > now;
 
-export function findGrant(policy, { vault, itemId, origin, now = Date.now() }) {
+// kind "login" (default; grants without a kind are login grants) or "signup" (item = identity).
+const kindOf = (g) => g.kind || 'login';
+
+export function findGrant(policy, { vault, itemId, origin, kind = 'login', now = Date.now() }) {
   return policy.grants.find(
-    (g) => g.vault === vault && (g.item === '*' || g.item === itemId) && live(g, now) && g.origins.some((p) => originMatches(p, origin)),
+    (g) => kindOf(g) === kind && g.vault === vault && (g.item === '*' || g.item === itemId) && live(g, now) && g.origins.some((p) => originMatches(p, origin)),
   );
 }
 
-export function grantsForItem(policy, vault, itemId, now = Date.now()) {
-  return policy.grants.filter((g) => g.vault === vault && (g.item === '*' || g.item === itemId) && live(g, now));
+export function grantsForItem(policy, vault, itemId, kind = 'login', now = Date.now()) {
+  return policy.grants.filter((g) => kindOf(g) === kind && g.vault === vault && (g.item === '*' || g.item === itemId) && live(g, now));
 }
 
 export function addGrant(policy, grant) {
   // Merge into an existing grant for the same item/submit/expiry so the file stays readable.
   const same = policy.grants.find(
-    (g) => g.vault === grant.vault && g.item === grant.item && !g.expires_at && !grant.expires_at && g.allow_submit === grant.allow_submit,
+    (g) => kindOf(g) === kindOf(grant) && g.vault === grant.vault && g.item === grant.item && !g.expires_at && !grant.expires_at && g.allow_submit === grant.allow_submit,
   );
   if (same) {
     for (const o of grant.origins) if (!same.origins.includes(o)) same.origins.push(o);

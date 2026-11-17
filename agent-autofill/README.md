@@ -14,9 +14,21 @@ agent ──fill_login("github.com", tab 123)──▶ MCP server ──secret�
 
 | Tool | What it does |
 |---|---|
-| `list_logins` | login names, saved sites, approved origins. No secrets. |
-| `request_authorization` | shows **you** a macOS dialog (Deny / Allow 1 hour / Always allow). Your answer is written to the allow-list. The agent cannot approve. |
+| `list_logins` | login and identity names, saved sites, approved origins, which fields exist. No secrets or personal details. |
+| `request_authorization` | shows **you** a macOS dialog (Deny / Allow 1 hour / Always allow) for a `login` (sign in) or an `identity` (sign up). Your answer is written to the allow-list. The agent cannot approve. |
 | `fill_login` | fills username / password / TOTP into a page and optionally submits. Refuses unless the page's real origin is approved for that login. |
+| `fill_signup` | fills a registration form from an identity (name, email, username, phone, company, address, country dropdowns) plus a password, and optionally submits. By default it generates a strong password and **saves it to the vault as a new login before typing it**, then approves that login for the site so the agent can sign in later with `fill_login`. Or it reuses an approved existing login (`credentials: { login }`). Never ticks terms/consent boxes. |
+
+### Identities (for sign-ups)
+
+Create a Bitwarden **Identity** item in the vault folder (web vault or app → New → Identity) with the
+details sites ask for: first/last name, email, username, phone, company, address, country. One item per
+persona (for example "Test persona" with a `+test` email address). SSN, passport and licence numbers are
+never read. In CI, use `AGENT_AUTOFILL_IDENTITY_<NAME>='{"first_name":"…","email":"…"}'` with the `env`
+vault; logins generated there live in memory for the run.
+
+If the form's own validation blocks the submit (say, a username in an email-only field), the result says
+`submitted: false` and names the rejected field.
 
 ## Channels
 
@@ -46,6 +58,12 @@ grants:                             # written by the dialog or `agent-autofill a
     item_name: github.com
     origins: ["https://github.com"]
     allow_submit: true
+  - kind: signup                    # identity may be used to sign up on these sites
+    vault: bitwarden
+    item: 5be1...                   # identity id, or "*"
+    item_name: Test persona
+    origins: ["http://localhost:*", "https://*.sara.test"]
+    allow_submit: true
 ```
 
 Origin patterns: exact `https://app.example.com`; `https://*.example.com` (domain + subdomains);
@@ -68,6 +86,7 @@ Agent registration in Claude Desktop / Claude Code is done by `agent-vault/confi
 agent-autofill list                             # approvals
 agent-autofill allow github.com https://github.com [--hours 8] [--no-submit]
 agent-autofill allow '*' 'http://localhost:*'   # every login, any local port
+agent-autofill allow --signup 'Test persona' 'https://*.sara.test'   # sign-ups with an identity
 agent-autofill revoke github.com [origin]
 agent-autofill doctor
 ```
@@ -90,8 +109,9 @@ with permissions that fit that.
 ## Tests
 
 `npm test` runs unit tests plus an end-to-end run with Playwright's Chromium: both channels, selectors,
-TOTP, wildcards, wrong-origin refusal, and no secret in any tool output.
+TOTP, wildcards, wrong-origin refusal, sign-up then sign-in with the saved password, form-validation
+reporting, and no secret or personal detail in any tool output.
 
 ## Adding a vault vendor
 
-Add `src/vaults/<vendor>.js` exporting `create(config)` → `{ list, find, secrets }` (see `src/vaults/index.js`), and register it there.
+Add `src/vaults/<vendor>.js` exporting `create(config)` → `{ list, find, secrets }` (plus `listIdentities`, `findIdentity`, `identity`, `createLogin` for sign-ups) (see `src/vaults/index.js`), and register it there.

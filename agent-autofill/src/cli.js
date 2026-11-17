@@ -76,16 +76,18 @@ async function doctor() {
 
 async function allow(f) {
   const [login, ...origins] = f._;
-  if (!login || !origins.length) throw new Error('usage: agent-autofill allow <login|*> <origin...> [--vault name] [--no-submit] [--hours n]');
+  if (!login || !origins.length) throw new Error('usage: agent-autofill allow <login|*> <origin...> [--signup] [--vault name] [--no-submit] [--hours n]   (--signup: login is an identity)');
+  const signup = Boolean(f.signup);
   const policy = loadPolicy();
   const vName = vaultName(policy, f.vault);
   const v = openVault(vName, policy.vaults[vName]);
-  const item = login === '*' ? null : await v.find(login);
-  if (login !== '*' && !item) throw new Error(`login "${login}" not found in vault ${vName} (${v.scope})`);
+  const item = login === '*' ? null : signup ? await v.findIdentity?.(login) : await v.find(login);
+  if (login !== '*' && !item) throw new Error(`${signup ? 'identity' : 'login'} "${login}" not found in vault ${vName} (${v.scope})`);
   const pats = origins.map((o) => (isWildcard(o) ? o : normalizeOrigin(o)));
   pats.forEach(parsePattern);
   pruneExpired(policy);
   addGrant(policy, {
+    ...(signup && { kind: 'signup' }),
     vault: vName,
     item: item ? item.id : '*',
     item_name: item ? item.name : `ALL (${v.scope})`,
@@ -96,7 +98,7 @@ async function allow(f) {
     approved_via: 'cli',
   });
   savePolicy(policy);
-  console.log(`approved ${item ? item.name : 'ALL logins'} for ${pats.join(', ')}${pats.includes('*') ? '  (WARNING: any site)' : ''}`);
+  console.log(`approved ${signup ? 'signing up with ' : ''}${item ? item.name : `ALL ${signup ? 'identities' : 'logins'}`} for ${pats.join(', ')}${pats.includes('*') ? '  (WARNING: any site)' : ''}`);
 }
 
 function revoke(f) {
@@ -120,7 +122,7 @@ function list() {
   const policy = loadPolicy();
   if (!policy.grants.length) return console.log(`no approvals yet (${POLICY_PATH})`);
   for (const g of policy.grants) {
-    console.log(`${g.vault}  ${g.item_name || g.item}  ->  ${g.origins.join(', ')}${g.allow_submit ? '' : '  [no submit]'}${g.expires_at ? `  [until ${g.expires_at}]` : ''}`);
+    console.log(`${g.kind === 'signup' ? 'signup' : 'login '}  ${g.vault}  ${g.item_name || g.item}  ->  ${g.origins.join(', ')}${g.allow_submit ? '' : '  [no submit]'}${g.expires_at ? `  [until ${g.expires_at}]` : ''}`);
   }
 }
 
