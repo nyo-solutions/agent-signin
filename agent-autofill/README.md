@@ -54,13 +54,13 @@ cdp:
   allowed_hosts: [127.0.0.1, localhost, "::1"]
 grants:                             # written by the dialog or `agent-autofill allow`
   - vault: bitwarden
-    item: <vault item id>             # or "*" = every login in the folder
+    item: <vault item id>           # or "*" = every login in the folder
     item_name: github.com
     origins: ["https://github.com"]
     allow_submit: true
   - kind: signup                    # identity may be used to sign up on these sites
     vault: bitwarden
-    item: 5be1...                   # identity id, or "*"
+    item: <identity item id>        # or "*"
     item_name: Test persona
     origins: ["http://localhost:*", "https://*.sara.test"]
     allow_submit: true
@@ -78,7 +78,7 @@ bin/agent-autofill install          # registers the native host for Chrome (--br
 # chrome://extensions -> Developer mode -> Load unpacked -> ./extension  (ID efjfpgccejkkailhmopnddbcleklbedb)
 bin/agent-autofill doctor
 ```
-Agent registration in Claude Desktop / Claude Code is done by `agent-vault/configure-mcp-clients.py`.
+Agent registration in Claude Desktop / Claude Code is done by [`../agent-vault/configure-mcp-clients.py`](../agent-vault/configure-mcp-clients.py), or add `bin/agent-autofill-mcp` as a stdio MCP server in any client.
 
 ## CLI (for you and CI)
 

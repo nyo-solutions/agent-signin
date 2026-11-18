@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: bin/install-watchdog.sh fills in __AV_HOME__ and __HOME__ and loads it. -->
 <plist version="1.0"><dict>
   <key>Label</key><string>com.agent-vault.watchdog</string>
-  <key>ProgramArguments</key><array><string>/Users/you/projects/agent-vault/bin/vaultwarden-watchdog.sh</string></array>
+  <key>ProgramArguments</key><array><string>__AV_HOME__/bin/vaultwarden-watchdog.sh</string></array>
   <key>RunAtLoad</key><true/>
   <key>StartInterval</key><integer>300</integer>
-  <key>StandardOutPath</key><string>/Users/you/Library/Logs/agent-vault-watchdog.log</string>
-  <key>StandardErrorPath</key><string>/Users/you/Library/Logs/agent-vault-watchdog.log</string>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/agent-vault-watchdog.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/agent-vault-watchdog.log</string>
 </dict></plist>

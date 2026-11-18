@@ -1,0 +1,19 @@
+name: Restore backup
+on:
+  workflow_dispatch:
+    inputs:
+      key: { description: "S3 key, e.g. exports/vault-20261106-030000.tar.gz", required: true }
+      confirm: { description: 'Type "restore" to overwrite the current vault data', required: true }
+permissions: { id-token: write, contents: read }
+jobs:
+  restore:
+    uses: nyo-solutions/agent-signin/.github/workflows/vault-restore.yml@main
+    with:
+      domain: ${{ vars.VAULT_DOMAIN }}
+      zone_name: ${{ vars.ZONE_NAME }}
+      key: ${{ inputs.key }}
+      confirm: ${{ inputs.confirm }}
+    secrets:
+      aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
+      aws_zone_id: ${{ vars.AWS_ZONE_ID }}
+      alert_email: ${{ vars.ALERT_EMAIL }}

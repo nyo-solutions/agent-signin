@@ -5,7 +5,7 @@ Merges into existing config without touching other servers; backs up first."""
 import glob, json, os, shutil, subprocess, time
 HOME = os.path.expanduser("~")
 NAME = "agent-autofill"
-LAUNCHER = f"{HOME}/projects/agent-autofill/bin/agent-autofill-mcp"
+LAUNCHER = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agent-autofill", "bin", "agent-autofill-mcp"))
 RETIRED = ["bitwarden"]
 stamp = time.strftime("%Y%m%d-%H%M%S")
 

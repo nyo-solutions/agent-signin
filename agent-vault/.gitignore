@@ -6,6 +6,7 @@ aws/cdk.context.json
 aws/build/
 __pycache__/
 # machine-local state
+local.env
 target
 bin/vault-touchid
 *.bak-*

@@ -1,0 +1,33 @@
+name: Vault backup (reusable)
+# Consistent export of the vault to the transfer bucket (exports/, kept 30 days),
+# on top of the automatic daily AWS Backup snapshots of EFS (kept 35 days).
+on:
+  workflow_call:
+    inputs:
+      source_repo: { type: string, default: "nyo-solutions/agent-signin", description: "Repo holding this code" }
+      source_ref: { type: string, default: "main", description: "Branch, tag or SHA of the code to run" }
+      domain: { type: string, required: true, description: "Vault hostname, e.g. vault.example.com" }
+      zone_name: { type: string, required: true, description: "Route 53 public hosted zone, e.g. example.com" }
+    secrets:
+      aws_role_arn: { required: true, description: "IAM role GitHub OIDC may assume (aws/setup-github.sh)" }
+      aws_zone_id: { required: true, description: "Route 53 hosted zone id" }
+      alert_email: { required: false }
+permissions: { id-token: write, contents: read }
+concurrency: { group: agent-vault-aws, cancel-in-progress: false }
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: agent-vault/aws } }
+    env: { VAULT_DOMAIN: "${{ inputs.domain }}", ZONE_NAME: "${{ inputs.zone_name }}", ZONE_ID: "${{ secrets.aws_zone_id }}" }
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: "${{ inputs.source_repo }}", ref: "${{ inputs.source_ref }}" }
+      - uses: ./.github/actions/vault-aws-setup
+        with: { role-arn: "${{ secrets.aws_role_arn }}", zone-id: "${{ secrets.aws_zone_id }}", domain: "${{ inputs.domain }}" }
+      - name: Export
+        run: |
+          source lib.sh; FN=$(out AgentVaultData MigrateFunction)
+          [ -n "$FN" ] || { echo "::warning::AgentVaultData not deployed; nothing to back up"; exit 0; }
+          aws lambda invoke --function-name "$FN" --cli-binary-format raw-in-base64-out --payload '{"action":"export"}' out.json >/dev/null
+          if jq -e .errorMessage out.json >/dev/null; then jq . out.json; exit 1; fi
+          echo "Backup: $(jq -r .exported out.json)" | tee -a "$GITHUB_STEP_SUMMARY"

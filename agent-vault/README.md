@@ -1,30 +1,39 @@
 # agent-vault
 
 Self-hosted [Vaultwarden](https://github.com/dani-garcia/vaultwarden) for you and your AI agents.
-Agents (Claude Desktop, Claude Code) sign in through [agent-autofill](https://github.com/nyo-solutions/agent-autofill)
-(`~/projects/agent-autofill`): it fills approved logins from the `ai` folder straight into the browser, so agents
-never receive passwords or TOTP codes. The official `@bitwarden/mcp-server` is no longer registered, because it
-returned plaintext secrets to the agent.
+Agents (Claude Desktop, Claude Code) sign in through [agent-autofill](../agent-autofill): it fills
+approved logins from one vault folder straight into the browser, so agents never receive passwords or
+TOTP codes.
 
-- **Vault:** https://vault.example.com — AWS Lambda + EFS in us-east-1, ~$0–1/month
-- **Clients:** Bitwarden browser extension, desktop app, Android app → "Self-hosted" → the URL above
+- **Vault:** your own domain (`VAULT_DOMAIN`), AWS Lambda + EFS in us-east-1, ~$0–1/month
+- **Clients:** Bitwarden browser extension, desktop app, mobile apps → "Self-hosted" → your vault URL
 - **Agents:** session key lives in the macOS Keychain; nothing secret is in any config file or in this repo
 
-## GitHub Actions (Actions tab → choose workflow → Run workflow)
+## Settings
+
+Copy `local.env.example` to `local.env` (gitignored) and set `VAULT_DOMAIN`, `ZONE_NAME` (a Route 53
+public hosted zone you own) and `GITHUB_REPO` (the private ops repo that may deploy, see below).
+
+## GitHub Actions (in your private ops repo)
+
+The workflows in this repository's `.github/workflows/vault-*.yml` are **reusable**. Call them from a
+small private repo so run logs, which contain AWS stack output, are never public:
+[`ops-template/`](ops-template) has the caller workflows to copy. Account id, domain and zone id are also
+masked in logs.
 
 | Workflow | When | What |
 |---|---|---|
-| **Deploy** | automatically on push to `main` touching `aws/`, or manually | builds the image, deploys `AgentVaultData` + `AgentVault`, smoke-tests the URL. Tick **signups** to allow creating an account, then run it again unticked |
+| **Deploy** | manually | builds the image, deploys `AgentVaultData` + `AgentVault`, smoke-tests the URL. Tick **signups** to allow creating an account, then run it again unticked |
 | **Backup** | Sundays 03:00 UTC, or manually | consistent export to the transfer bucket (`exports/`, kept 30 days) |
 | **Restore backup** | manually (type `restore`) | safety export, then replaces vault data with a chosen export |
 | **Take vault offline (keep data)** | manually (type `destroy`) | backup, then removes the public endpoint/Lambda/cert/DNS. Data stays; **Deploy** brings it back |
-| **Remove vault (DELETES DATA)** | manually (type `delete vault.example.com`) | deletes both stacks, the EFS data, the transfer bucket, optionally the AWS Backup snapshots |
+| **Remove vault (DELETES DATA)** | manually (type `delete <your vault domain>`) | deletes both stacks, the EFS data, the transfer bucket, optionally the AWS Backup snapshots |
 
 Besides the weekly export, EFS has automatic **daily AWS Backup snapshots kept 35 days**.
 Before *Remove vault*, also take an encrypted export from the web vault (Tools → Export vault).
 
 Workflows authenticate to AWS with GitHub OIDC (role `agent-vault-github`, trusted only for `main`
-of this repo) — no AWS keys are stored in GitHub.
+of your ops repo); no AWS keys are stored in GitHub.
 
 ## Stacks (`aws/`, CDK TypeScript)
 
@@ -65,7 +74,7 @@ These stay local on purpose: they need your master password, Touch ID, your Mac'
 | `refresh-agent-session.sh` | login (API key) + unlock (Touch ID) → `BW_SESSION` into Keychain |
 | `bin/vault-touchid` (built from `touchid/`) | master password in Keychain, readable only by this binary after Touch ID |
 | `configure-mcp-clients.py` | idempotently registers agent-autofill in Claude Desktop and Claude Code and removes the retired `bitwarden` server |
-| `bin/vaultwarden-watchdog.sh` + `launchd/` | every 5 min: keeps the local container up and re-asserts MCP config |
+| `bin/vaultwarden-watchdog.sh` + `launchd/` | every 5 min: keeps the local container up and re-asserts MCP config; install with `bin/install-watchdog.sh` |
 | `bin/vaultwarden-up.sh`, `install-hostname-and-ca.sh` | the original local Docker vault at https://passman.internal |
 
 ## Keychain items (login keychain)

@@ -1,0 +1,45 @@
+name: Vault take offline (reusable)
+# Removes the public endpoint, Lambda, certificate and DNS record (stack AgentVault).
+# Vault data (EFS, backups, transfer bucket) is kept; deploy again to bring it back.
+on:
+  workflow_call:
+    inputs:
+      source_repo: { type: string, default: "nyo-solutions/agent-signin", description: "Repo holding this code" }
+      source_ref: { type: string, default: "main", description: "Branch, tag or SHA of the code to run" }
+      domain: { type: string, required: true, description: "Vault hostname, e.g. vault.example.com" }
+      zone_name: { type: string, required: true, description: "Route 53 public hosted zone, e.g. example.com" }
+      confirm: { type: string, required: true, description: 'Must be "destroy"' }
+    secrets:
+      aws_role_arn: { required: true, description: "IAM role GitHub OIDC may assume (aws/setup-github.sh)" }
+      aws_zone_id: { required: true, description: "Route 53 hosted zone id" }
+      alert_email: { required: false }
+permissions: { id-token: write, contents: read }
+concurrency: { group: agent-vault-aws, cancel-in-progress: false }
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: agent-vault/aws } }
+    env: { VAULT_DOMAIN: "${{ inputs.domain }}", ZONE_NAME: "${{ inputs.zone_name }}", ZONE_ID: "${{ secrets.aws_zone_id }}" }
+    steps:
+      - name: Check confirmation
+        if: inputs.confirm != 'destroy'
+        working-directory: .
+        run: |
+          echo "::error::Confirmation text must be exactly: destroy"
+          exit 1
+      - uses: actions/checkout@v4
+        with: { repository: "${{ inputs.source_repo }}", ref: "${{ inputs.source_ref }}" }
+      - uses: ./.github/actions/vault-aws-setup
+        with: { role-arn: "${{ secrets.aws_role_arn }}", zone-id: "${{ secrets.aws_zone_id }}", domain: "${{ inputs.domain }}" }
+      - name: Backup first
+        run: |
+          source lib.sh; FN=$(out AgentVaultData MigrateFunction)
+          [ -z "$FN" ] && exit 0
+          aws lambda invoke --function-name "$FN" --cli-binary-format raw-in-base64-out --payload '{"action":"export"}' out.json >/dev/null
+          jq -e .exported out.json >/dev/null && echo "Backup: $(jq -r .exported out.json)" >> "$GITHUB_STEP_SUMMARY"
+      - name: cdk destroy AgentVault
+        run: |
+          source lib.sh
+          stack_exists AgentVault || { echo "AgentVault is not deployed"; exit 0; }
+          npx cdk destroy AgentVault -c zoneId="$ZONE_ID" --force
+          echo "Vault is offline; data kept. Deploy again to restore." >> "$GITHUB_STEP_SUMMARY"

@@ -1,7 +1,9 @@
 # Shared settings for agent-vault scripts (sourced, not executed).
-AV_HOME="$HOME/projects/agent-vault"
-BW_BIN="/opt/homebrew/bin/bw"
-KC_SERVICE="agent-vault-bw-session"         # BW_SESSION (read by agent-autofill)
+AV_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Machine-local settings (domain, ops repo, ...): copy local.env.example to local.env.
+[ -f "$AV_HOME/local.env" ] && source "$AV_HOME/local.env"
+BW_BIN="${BW_BIN:-/opt/homebrew/bin/bw}"
+KC_SERVICE="agent-vault-bw-session"       # BW_SESSION (read by agent-autofill)
 KC_CLIENTID="agent-vault-bw-clientid"       # Bitwarden personal API key (machine login)
 KC_CLIENTSECRET="agent-vault-bw-clientsecret"
 TOUCHID="$AV_HOME/bin/vault-touchid"        # master password behind Touch ID
@@ -12,7 +14,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/share/fnm/aliases/def
 VW_TARGET="$(cat "$AV_HOME/target" 2>/dev/null || echo local)"
 
 if [ "$VW_TARGET" = "aws" ]; then
-  VW_HOST="vault.example.com"
+  VW_HOST="${VAULT_DOMAIN:?set VAULT_DOMAIN in $AV_HOME/local.env}"
   VW_URL="https://$VW_HOST"
   CURL_TLS=()                                # public certificate (ACM)
 else

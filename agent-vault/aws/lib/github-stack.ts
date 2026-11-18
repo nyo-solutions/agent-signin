@@ -3,7 +3,7 @@ import { Construct } from "constructs";
 import * as iam from "aws-cdk-lib/aws-iam";
 
 export interface GithubStackProps extends StackProps {
-  repo: string;               // "nyo-solutions/agent-vault"
+  repo: string;               // "your-org/your-ops-repo"
   /** OIDC sub prefix GitHub actually sends, e.g. "repo:org@123/repo@456" when the repo uses immutable subjects. */
   subPrefix?: string;
   existingProviderArn?: string; // reuse an account-wide GitHub OIDC provider if one exists

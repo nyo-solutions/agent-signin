@@ -1,0 +1,38 @@
+name: Vault deploy (reusable)
+# Builds the Lambda image and deploys AgentVaultData + AgentVault.
+# Call it from a private ops repo (see agent-vault/ops-template) so run logs stay private.
+on:
+  workflow_call:
+    inputs:
+      source_repo: { type: string, default: "nyo-solutions/agent-signin", description: "Repo holding this code" }
+      source_ref: { type: string, default: "main", description: "Branch, tag or SHA of the code to run" }
+      domain: { type: string, required: true, description: "Vault hostname, e.g. vault.example.com" }
+      zone_name: { type: string, required: true, description: "Route 53 public hosted zone, e.g. example.com" }
+      signups: { type: boolean, default: false, description: "Allow new accounts (open briefly, then redeploy without)" }
+    secrets:
+      aws_role_arn: { required: true, description: "IAM role GitHub OIDC may assume (aws/setup-github.sh)" }
+      aws_zone_id: { required: true, description: "Route 53 hosted zone id" }
+      alert_email: { required: false }
+permissions: { id-token: write, contents: read }
+concurrency: { group: agent-vault-aws, cancel-in-progress: false }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: agent-vault/aws } }
+    env: { VAULT_DOMAIN: "${{ inputs.domain }}", ZONE_NAME: "${{ inputs.zone_name }}", ZONE_ID: "${{ secrets.aws_zone_id }}", ALERT_EMAIL: "${{ secrets.alert_email }}", SIGNUPS: "${{ inputs.signups && 'true' || 'false' }}" }
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: "${{ inputs.source_repo }}", ref: "${{ inputs.source_ref }}" }
+      - uses: ./.github/actions/vault-aws-setup
+        with: { role-arn: "${{ secrets.aws_role_arn }}", zone-id: "${{ secrets.aws_zone_id }}", domain: "${{ inputs.domain }}" }
+      - uses: docker/setup-qemu-action@v3   # image is linux/arm64
+      - name: cdk deploy
+        run: |
+          ctx=(-c zoneId="$ZONE_ID" -c signups="$SIGNUPS"); [ -n "$ALERT_EMAIL" ] && ctx+=(-c alertEmail="$ALERT_EMAIL")
+          echo "Signups: $SIGNUPS" | tee -a "$GITHUB_STEP_SUMMARY"
+          npx cdk deploy AgentVaultData AgentVault "${ctx[@]}" --require-approval never
+      - name: Smoke test
+        run: |
+          source lib.sh; URL=$(out AgentVault Url)
+          for _ in $(seq 1 20); do curl -fs --max-time 15 "$URL/alive" >/dev/null && { echo "vault is live"; exit 0; }; sleep 15; done
+          echo "::error::vault did not answer"; exit 1

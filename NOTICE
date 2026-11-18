@@ -1,0 +1,26 @@
+agent-signin
+Copyright 2026 NYO Solutions
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This repository contains only original code. It does not include, copy or modify
+third-party source code. The following projects are downloaded or invoked at build,
+deploy or run time and remain under their own licenses:
+
+  Vaultwarden (container image vaultwarden/server)      AGPL-3.0   https://github.com/dani-garcia/vaultwarden
+  Bitwarden web vault (bundled in the Vaultwarden image) GPL-3.0   https://github.com/bitwarden/clients
+  Bitwarden CLI (`bw`, run as a separate program)         GPL-3.0   https://github.com/bitwarden/clients
+  AWS Lambda Web Adapter (container image)                Apache-2.0 https://github.com/awslabs/aws-lambda-web-adapter
+  AWS CDK, constructs, TypeScript                         Apache-2.0
+  Model Context Protocol TypeScript SDK                   MIT
+  zod                                                     MIT
+  yaml                                                    ISC
+  Playwright Chromium (tests only)                        BSD-3-Clause / Apache-2.0
+
+The vault deployment runs the unmodified Vaultwarden image. If you modify Vaultwarden
+and offer it to others over a network, the AGPL-3.0 requires you to make your modified
+source available.
+
+Trademarks: Bitwarden is a trademark of Bitwarden Inc. Vaultwarden, Chrome, AWS and
+Claude are trademarks of their respective owners. This project is not affiliated with,
+endorsed by or sponsored by any of them; names are used only to describe compatibility.

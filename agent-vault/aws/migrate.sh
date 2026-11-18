@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 source lib.sh
-AV="$HOME/projects/agent-vault"; SRC="$HOME/.vaultwarden-data"
+AV="$(cd "$(dirname "$0")/.." && pwd)"; SRC="$HOME/.vaultwarden-data"
 BUCKET=$(out AgentVaultData TransferBucket); MIGRATE_FN=$(out AgentVaultData MigrateFunction)
 VW_FN=$(out AgentVault VaultwardenFunction); URL=$(out AgentVault Url)
 [ -n "$BUCKET" ] && [ -n "$VW_FN" ] || { echo "Deploy first (./deploy.sh or the Deploy workflow)." >&2; exit 1; }

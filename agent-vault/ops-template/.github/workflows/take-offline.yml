@@ -1,0 +1,17 @@
+name: Take vault offline (keep data)
+on:
+  workflow_dispatch:
+    inputs:
+      confirm: { description: 'Type "destroy" to take the vault offline', required: true }
+permissions: { id-token: write, contents: read }
+jobs:
+  destroy:
+    uses: nyo-solutions/agent-signin/.github/workflows/vault-take-offline.yml@main
+    with:
+      domain: ${{ vars.VAULT_DOMAIN }}
+      zone_name: ${{ vars.ZONE_NAME }}
+      confirm: ${{ inputs.confirm }}
+    secrets:
+      aws_role_arn: ${{ vars.AWS_ROLE_ARN }}
+      aws_zone_id: ${{ vars.AWS_ZONE_ID }}
+      alert_email: ${{ vars.ALERT_EMAIL }}
