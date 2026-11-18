@@ -87,7 +87,7 @@ async function doctor() {
 
 async function allow(f) {
   const [login, ...origins] = f._;
-  if (!login || !origins.length) throw new Error('usage: agent-autofill allow <login|*> <origin...> [--signup] [--vault name] [--no-submit] [--hours n]   (--signup: login is an identity)');
+  if (!login || !origins.length) throw new Error('usage: agent-autofill allow <login|*> <origin...> [--signup] [--visible-secrets] [--vault name] [--no-submit] [--hours n]   (--signup: login is an identity; --visible-secrets: hidden custom fields may go into visible text inputs)');
   const signup = Boolean(f.signup);
   const policy = loadPolicy();
   const vName = vaultName(policy, f.vault);
@@ -99,6 +99,7 @@ async function allow(f) {
   pruneExpired(policy);
   addGrant(policy, {
     ...(signup && { kind: 'signup' }),
+    ...(f['visible-secrets'] && { allow_visible_secrets: true }),
     vault: vName,
     item: item ? item.id : '*',
     item_name: item ? item.name : `ALL (${v.scope})`,
@@ -133,7 +134,7 @@ function list() {
   const policy = loadPolicy();
   if (!policy.grants.length) return console.log(`no approvals yet (${POLICY_PATH})`);
   for (const g of policy.grants) {
-    console.log(`${g.kind === 'signup' ? 'signup' : 'login '}  ${g.vault}  ${g.item_name || g.item}  ->  ${g.origins.join(', ')}${g.allow_submit ? '' : '  [no submit]'}${g.expires_at ? `  [until ${g.expires_at}]` : ''}`);
+    console.log(`${g.kind === 'signup' ? 'signup' : 'login '}  ${g.vault}  ${g.item_name || g.item}  ->  ${g.origins.join(', ')}${g.allow_submit ? '' : '  [no submit]'}${g.allow_visible_secrets ? '  [visible secrets]' : ''}${g.expires_at ? `  [until ${g.expires_at}]` : ''}`);
   }
 }
 

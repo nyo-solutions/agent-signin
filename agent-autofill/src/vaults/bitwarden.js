@@ -8,6 +8,12 @@ import { IDENTITY_FIELDS, fromBitwarden } from './identity-fields.js';
 
 const run = promisify(execFile);
 
+// Bitwarden custom field types: 0 text, 1 hidden, 2 boolean, 3 linked (skipped: it points at username/password).
+const FIELD_TYPES = { 0: 'text', 1: 'hidden', 2: 'boolean' };
+function customMeta(fields = []) {
+  return (fields || []).filter((f) => f.name && FIELD_TYPES[f.type]).map((f) => ({ name: f.name, type: FIELD_TYPES[f.type] }));
+}
+
 export function create(cfg) {
   const bw = cfg.bw_bin || 'bw';
   let session;
@@ -96,6 +102,7 @@ export function create(cfg) {
         hasUsername: Boolean(i.login?.username),
         hasPassword: Boolean(i.login?.password),
         hasTotp: Boolean(i.login?.totp),
+        custom: customMeta(i.fields),
       }));
     },
     async find(ref) {
@@ -126,13 +133,20 @@ export function create(cfg) {
       synced = 0; // make the new item visible to the next list()
       return created;
     },
-    async secrets(id, kinds) {
+    async secrets(id, kinds, customNames) {
       const item = (await rawItems()).find((i) => i.id === id); // re-checks the folder scope
       if (!item) throw new Error('bitwarden: item not found in the configured scope');
       const out = {};
       if (kinds.includes('username')) out.username = item.login?.username ?? undefined;
       if (kinds.includes('password')) out.password = item.login?.password ?? undefined;
       if (kinds.includes('totp')) out.totp = item.login?.totp ? (await bwJson(['get', 'totp', id])).trim() : undefined;
+      if (customNames?.length) {
+        out.custom = {};
+        for (const n of customNames) {
+          const f = (item.fields || []).find((x) => x.name === n && x.type !== 3);
+          if (f) out.custom[n] = f.type === 2 ? String(f.value) === 'true' : f.value ?? '';
+        }
+      }
       return out;
     },
   };

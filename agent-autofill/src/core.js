@@ -4,7 +4,7 @@ import { audit } from './audit.js';
 import { askUser } from './authorize.js';
 import { chromeFill, chromeTarget } from './channels/extension.js';
 import { cdpFill, cdpTarget } from './channels/cdp.js';
-import { addGrant, findGrant, grantsForItem, isWildcard, loadPolicy, normalizeOrigin, originMatches, parsePattern, pruneExpired, savePolicy, vaultName } from './policy.js';
+import { addGrant, findGrant, grantsForItem, matchingGrants, isWildcard, loadPolicy, normalizeOrigin, originMatches, parsePattern, pruneExpired, savePolicy, vaultName } from './policy.js';
 import { openVault } from './vaults/index.js';
 import { generatePassword } from './password.js';
 
@@ -24,6 +24,8 @@ export async function listLogins() {
         saved_sites: item.uris,
         approved_origins: [...new Set(grants.flatMap((g) => g.origins))],
         can_submit: grants.some((g) => g.allow_submit),
+        custom_fields: (item.custom || []).map((f) => ({ name: f.name, type: f.type })),
+        visible_secrets_allowed: grants.some((g) => g.allow_visible_secrets),
         has: ['username', 'password', 'totp'].filter((k) => item[`has${k[0].toUpperCase()}${k.slice(1)}`]),
       });
     }
@@ -43,7 +45,7 @@ export async function listLogins() {
   };
 }
 
-export async function requestAuthorization({ login, identity, vault, origins, allow_submit = true, reason }) {
+export async function requestAuthorization({ login, identity, vault, origins, allow_submit = true, allow_visible_secrets = false, reason }) {
   if (Boolean(login) === Boolean(identity)) throw new Error('pass exactly one of login (to sign in) or identity (to sign up)');
   const kind = identity ? 'signup' : 'login';
   const ref = login || identity;
@@ -57,13 +59,14 @@ export async function requestAuthorization({ login, identity, vault, origins, al
   const pats = origins.map((o) => (isWildcard(o) ? o : normalizeOrigin(o)));
   pats.forEach(parsePattern);
 
-  if (!allItems && pats.every((p) => !isWildcard(p) && findGrant(policy, { vault: vName, itemId: item.id, origin: p, kind }))) {
+  const covered = (p) => { const g = findGrant(policy, { vault: vName, itemId: item.id, origin: p, kind }); return g && (!allow_visible_secrets || g.allow_visible_secrets); };
+  if (!allItems && pats.every((p) => !isWildcard(p) && covered(p))) {
     return { approved: true, already: true, [kind === 'signup' ? 'identity' : 'login']: item.name, origins: pats };
   }
   const itemSites = item?.uris ? item.uris.map((u) => { try { return normalizeOrigin(u); } catch { return u; } }) : [];
   const siteMismatch = Boolean(item?.uris) && pats.some((p) => !isWildcard(p) && !itemSites.includes(p));
 
-  const answer = await askUser({ purpose: kind, itemName: item?.name, itemSites, vaultLabel: vaultLabel(vName, v), origins: pats, allItems, allowSubmit: allow_submit, reason, siteMismatch });
+  const answer = await askUser({ purpose: kind, allowVisibleSecrets: allow_visible_secrets, itemName: item?.name, itemSites, vaultLabel: vaultLabel(vName, v), origins: pats, allItems, allowSubmit: allow_submit, reason, siteMismatch });
   audit({ action: 'authorize', kind, vault: vName, item: item?.name ?? '*', origins: pats, answer });
   if (answer === 'deny') return { approved: false, message: 'The user denied this request. Do not retry unless the user asks you to.' };
 
@@ -76,6 +79,7 @@ export async function requestAuthorization({ login, identity, vault, origins, al
     item_name: allItems ? `ALL (${v.scope})` : item.name,
     origins: pats,
     allow_submit,
+    ...(allow_visible_secrets && { allow_visible_secrets: true }),
     ...(answer === 'hour' && { expires_at: new Date(Date.now() + 3600_000).toISOString() }),
     approved_at: new Date().toISOString(),
     approved_via: 'dialog',
@@ -84,7 +88,7 @@ export async function requestAuthorization({ login, identity, vault, origins, al
   return { approved: true, [kind === 'signup' ? 'identity' : 'login']: item?.name ?? '*', origins: pats, ...(answer === 'hour' && { expires_in: '1 hour' }) };
 }
 
-export async function fillLogin({ login, vault, target, fields, submit = false }) {
+export async function fillLogin({ login, vault, target, fields, custom, submit = false }) {
   const policy = loadPolicy();
   const vName = vaultName(policy, vault);
   const v = openVault(vName, policy.vaults[vName]);
@@ -101,17 +105,33 @@ export async function fillLogin({ login, vault, target, fields, submit = false }
     audit({ action: 'fill', vault: vName, login: item.name, origin, result: 'not-approved' });
     throw new Error(`"${item.name}" is not approved for ${origin}. Call request_authorization with login "${item.name}" and origin "${origin}"; the user decides.`);
   }
-  if (submit && !grant.allow_submit) throw new Error(`the approval for "${item.name}" on ${origin} does not allow submitting; fill without submit`);
+  const grants = matchingGrants(policy, { vault: vName, itemId: item.id, origin });
+  if (submit && !grants.some((g) => g.allow_submit)) throw new Error(`the approval for "${item.name}" on ${origin} does not allow submitting; fill without submit`);
 
-  const wanted = fields && Object.keys(fields).length ? fields : { username: 'auto', password: 'auto' };
+  const customNames = Object.keys(custom || {});
+  const wanted = fields && Object.keys(fields).length ? fields : customNames.length ? {} : { username: 'auto', password: 'auto' };
   const kinds = Object.keys(wanted).filter((k) => ['username', 'password', 'totp'].includes(k));
-  if (!kinds.length) throw new Error('fields must name username, password and/or totp');
+  if (!kinds.length && !customNames.length) throw new Error('fields must name username, password and/or totp, or pass custom fields');
+  const meta = Object.fromEntries((item.custom || []).map((f) => [f.name, f]));
+  const unknownCustom = customNames.filter((n) => !meta[n]);
+  if (unknownCustom.length) {
+    throw new Error(`"${item.name}" has no custom field ${unknownCustom.map((n) => `"${n}"`).join(', ')}; it has: ${Object.keys(meta).map((n) => `"${n}"`).join(', ') || 'none'}`);
+  }
 
   // 3. Read the secrets and hand them straight to the browser channel.
-  const secrets = await v.secrets(item.id, kinds);
-  const missing = kinds.filter((k) => !secrets[k]);
+  const secrets = await v.secrets(item.id, kinds, customNames);
+  const missing = [...kinds.filter((k) => !secrets[k]), ...customNames.filter((n) => secrets.custom?.[n] === undefined).map((n) => `custom field "${n}"`)];
   if (missing.length) throw new Error(`"${item.name}" has no ${missing.join(', ')} in the vault`);
-  const req = { expectedOrigin: origin, fields: kinds.map((k) => ({ kind: k, selector: wanted[k], value: secrets[k] })), submit };
+  const req = {
+    expectedOrigin: origin,
+    allowVisibleSecrets: grants.some((g) => g.allow_visible_secrets),
+    fields: [
+      ...kinds.map((k) => ({ kind: k, selector: wanted[k], value: secrets[k] })),
+      ...customNames.map((n) => ({ kind: 'custom', name: n, ctype: meta[n].type, selector: custom[n], value: secrets.custom[n] })),
+    ],
+    submit,
+  };
+  if (secrets.custom) for (const n of Object.keys(secrets.custom)) secrets.custom[n] = undefined;
   let result;
   try {
     result = await sendFill(target, resolved, req, policy);

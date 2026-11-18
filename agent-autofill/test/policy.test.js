@@ -64,3 +64,15 @@ test('signup grants are separate from login grants', async () => {
   assert.ok(fg(policy, { vault: 'v', itemId: 'id1', origin: 'https://a.test', kind: 'signup' }));
   assert.ok(!fg(policy, { vault: 'v', itemId: 'id1', origin: 'https://a.test' }));
 });
+
+test('visible-secret approvals never merge with ordinary ones', async () => {
+  const { addGrant, matchingGrants } = await import('../src/policy.js');
+  const policy = { grants: [] };
+  addGrant(policy, { vault: 'v', item: 'x', origins: ['https://a.test'], allow_submit: true });
+  addGrant(policy, { vault: 'v', item: 'x', origins: ['https://b.test'], allow_submit: true, allow_visible_secrets: true });
+  addGrant(policy, { vault: 'v', item: 'x', origins: ['https://c.test'], allow_submit: true });
+  assert.equal(policy.grants.length, 2);
+  assert.deepEqual(policy.grants[0].origins, ['https://a.test', 'https://c.test']);
+  assert.ok(!matchingGrants(policy, { vault: 'v', itemId: 'x', origin: 'https://a.test' }).some((g) => g.allow_visible_secrets));
+  assert.ok(matchingGrants(policy, { vault: 'v', itemId: 'x', origin: 'https://b.test' }).some((g) => g.allow_visible_secrets));
+});

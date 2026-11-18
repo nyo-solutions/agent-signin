@@ -8,8 +8,11 @@
 // mode "login"  (default): every requested field must be found, or nothing is filled.
 // mode "signup": requested fields given a selector must be found; auto-detected
 //                ones that the form doesn't have are skipped and reported.
+//
+// Custom vault fields: { kind: "custom", name, ctype: "text"|"hidden"|"boolean" }. Hidden ones
+// (API keys, secrets) only go into masked inputs unless allowVisibleSecrets is set by the policy.
 export async function fillPage(req) {
-  const { expectedOrigin, fields, submit, mode = 'login' } = req;
+  const { expectedOrigin, fields, submit, mode = 'login', allowVisibleSecrets = false } = req;
   if (location.origin !== expectedOrigin) {
     return { ok: false, error: `page origin is ${location.origin}, expected ${expectedOrigin}` };
   }
@@ -20,7 +23,7 @@ export async function fillPage(req) {
     return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
   };
   const usable = () =>
-    Array.from(document.querySelectorAll('input, select')).filter((el) => !el.disabled && !el.readOnly && visible(el));
+    Array.from(document.querySelectorAll('input, select, textarea')).filter((el) => !el.disabled && !el.readOnly && visible(el));
   const textish = (el) => el instanceof HTMLInputElement && ['text', 'email', 'tel', 'search'].includes(el.type);
 
   const bySelector = (sel) => {
@@ -68,10 +71,27 @@ export async function fillPage(req) {
     totp: ['text', 'tel', 'number', 'password'],
     email: ['email', 'text'],
   };
-  const allowed = (kind, el) => {
+  const label = (f) => (f.kind === 'custom' ? `custom:${f.name}` : f.kind);
+  const allowed = (f, el) => {
+    const kind = typeof f === 'string' ? f : f.kind;
+    if (kind === 'custom') {
+      if (f.ctype === 'boolean') return el instanceof HTMLInputElement && el.type === 'checkbox';
+      const visibleOk = f.ctype === 'text' || allowVisibleSecrets;
+      if (el instanceof HTMLTextAreaElement) return visibleOk;
+      if (!(el instanceof HTMLInputElement)) return false;
+      if (el.type === 'password') return true;
+      return visibleOk && ['text', 'search', 'url', 'email', 'tel', 'number'].includes(el.type);
+    }
     if (el instanceof HTMLSelectElement) return ['country', 'state'].includes(kind);
     if (!(el instanceof HTMLInputElement)) return false;
     return (TYPES[kind] || ['text', 'tel', 'search']).includes(el.type);
+  };
+  // Custom field auto-detect: an input whose name/id/label/placeholder contains the field name.
+  const norm = (x) => String(x).toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const customDetect = (f, taken) => {
+    const want = norm(f.name);
+    const all = Array.from(document.querySelectorAll('input, textarea')).filter((el) => !el.disabled && !el.readOnly && !taken.has(el) && (visible(el) || el.type === 'checkbox'));
+    return all.find((el) => norm(describe(el)).includes(want) && allowed(f, el));
   };
 
   const passwords = () => usable().filter((el) => el instanceof HTMLInputElement && el.type === 'password');
@@ -117,19 +137,23 @@ export async function fillPage(req) {
   try {
     for (const f of ordered) {
       const auto = !f.selector || f.selector === 'auto';
-      const el = auto ? (mode === 'signup' ? signupDetect(f.kind, taken) : loginDetect[f.kind]()) : bySelector(f.selector);
+      const name = label(f);
+      const el = auto
+        ? (f.kind === 'custom' ? customDetect(f, taken) : mode === 'signup' ? signupDetect(f.kind, taken) : loginDetect[f.kind]())
+        : bySelector(f.selector);
       if (!el) {
-        if (mode === 'signup' && auto) { skipped.push(f.kind); continue; }
-        return { ok: false, error: `no ${f.kind} field found${auto ? ' (auto-detect)' : ` for ${f.selector}`}` };
+        if (mode === 'signup' && auto) { skipped.push(name); continue; }
+        return { ok: false, error: `no ${name} field found${auto ? ' (auto-detect)' : ` for ${f.selector}`}` };
       }
-      if (!allowed(f.kind, el)) {
+      if (!allowed(f, el)) {
         const what = el instanceof HTMLInputElement ? `an input of type "${el.type}"` : `<${el.nodeName.toLowerCase()}>`;
-        return { ok: false, error: `${f.kind} target is ${what}; not allowed for ${f.kind}` };
+        const hint = f.kind === 'custom' && f.ctype === 'hidden' ? ' (hidden vault fields only go into masked inputs unless the approval allows visible secrets)' : '';
+        return { ok: false, error: `${name} target is ${what}; not allowed for ${name}${hint}` };
       }
-      if (el.disabled || el.readOnly) return { ok: false, error: `${f.kind} field is disabled or read-only` };
-      if (taken.has(el)) return { ok: false, error: `${f.kind} resolves to the same input as another field` };
+      if (el.disabled || el.readOnly) return { ok: false, error: `${name} field is disabled or read-only` };
+      if (taken.has(el)) return { ok: false, error: `${name} resolves to the same input as another field` };
       taken.add(el);
-      plan.push({ kind: f.kind, el, value: f.value });
+      plan.push({ kind: name, el, value: f.value });
     }
   } catch (e) {
     return { ok: false, error: e.message };
@@ -138,6 +162,7 @@ export async function fillPage(req) {
 
   const inputSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
   const selectSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+  const textareaSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
   const filled = [];
   for (const p of plan) {
     p.el.focus();
@@ -147,6 +172,14 @@ export async function fillPage(req) {
         Array.from(p.el.options).find((o) => want.length > 2 && o.textContent.trim().toLowerCase().startsWith(want));
       if (!opt) { skipped.push(p.kind); p.el.blur(); continue; }
       selectSetter.call(p.el, opt.value);
+    } else if (p.el instanceof HTMLInputElement && p.el.type === 'checkbox') {
+      const want = p.value === true || String(p.value).toLowerCase() === 'true';
+      if (p.el.checked !== want) p.el.click(); // click fires input/change like a user would
+      filled.push(p.kind);
+      continue;
+    } else if (p.el instanceof HTMLTextAreaElement) {
+      textareaSetter.call(p.el, p.value);
+      p.el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
     } else {
       inputSetter.call(p.el, p.value); // native setter so React/Vue/Angular see the change
       p.el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));

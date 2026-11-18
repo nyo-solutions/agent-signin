@@ -27,6 +27,7 @@ server.registerTool('request_authorization', {
     identity: z.string().optional().describe('Identity name or id from list_logins, or "*" for all (to sign up)'),
     origins: z.array(z.string()).min(1).describe('Sites to approve (origin, URL or wildcard pattern)'),
     allow_submit: z.boolean().optional().describe('Allow fill_login / fill_signup to submit the form (default true)'),
+    allow_visible_secrets: z.boolean().optional().describe('Ask to let hidden custom fields (API keys, secrets) go into visible text inputs, for sites whose key boxes are plain text (default false)'),
     reason: z.string().optional().describe('Short reason shown to the user'),
     vault: z.string().optional().describe('Vault name if more than one is configured'),
   },
@@ -42,11 +43,13 @@ server.registerTool('fill_login', {
   description:
     "Fill a sign-in form with a login the user approved for this site. The tool reads the secret from the vault and types it into the page itself; you only get back which fields were filled. It checks the page's real origin with the browser and refuses if the login is not approved there (then use request_authorization). " +
     "target.type 'chrome' = the user's Chrome through the Agent Autofill extension (tab_id from your browser tool, or url_contains, default the active tab); 'cdp' = a Chromium started by automation, at a local DevTools endpoint such as http://127.0.0.1:9222. " +
-    'fields defaults to username + password, auto-detected. For a one-time-code page pass only { "totp": "auto" }. Passwords only go into password-type inputs.',
+    'fields defaults to username + password, auto-detected (or nothing, when only custom is given). For a one-time-code page pass only { "totp": "auto" }. ' +
+    'custom fills the login\'s custom vault fields by name (list_logins shows names and types): text fields go into text inputs or textareas, boolean fields set checkboxes, hidden fields (API keys, secrets) only go into password-type inputs unless the user approved visible secrets for this site. Passwords only go into password-type inputs.',
   inputSchema: {
     login: z.string().describe('Login name or id from list_logins'),
     target: TARGET,
     fields: z.object({ username: selector.optional(), password: selector.optional(), totp: selector.optional() }).optional(),
+    custom: z.record(z.string(), selector).optional().describe('Custom vault fields to fill: { "<field name from list_logins>": selector or "auto" } (e.g. API key, client secret, account id)'),
     submit: z.union([z.boolean(), z.string()]).optional().describe('true = submit the form, or a selector of the button to click'),
     vault: z.string().optional(),
   },

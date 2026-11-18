@@ -1,7 +1,8 @@
 // Vault adapters. Each adapter implements:
 //   list()               -> [{ id, name, uris: [string], hasUsername, hasPassword, hasTotp }]  (no secrets)
 //   find(ref)            -> one of list() by id or exact name, or undefined
-//   secrets(id, kinds)   -> { username?, password?, totp? }  (totp = current code)
+//   secrets(id, kinds, customNames?) -> { username?, password?, totp?, custom?: { name: value } }  (totp = current code)
+//   list() items also carry custom: [{ name, type: 'text'|'hidden'|'boolean' }]  (names only)
 //   listIdentities()     -> [{ id, name, has: [field] }]  (no values)
 //   findIdentity(ref)    -> one of listIdentities() by id or exact name
 //   identity(id)         -> { first_name, last_name, full_name, email, username, phone, company,

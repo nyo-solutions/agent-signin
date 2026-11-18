@@ -16,8 +16,23 @@ agent ──fill_login("github.com", tab 123)──▶ MCP server ──secret�
 |---|---|
 | `list_logins` | login and identity names, saved sites, approved origins, which fields exist. No secrets or personal details. |
 | `request_authorization` | shows **you** a macOS dialog (Deny / Allow 1 hour / Always allow) for a `login` (sign in) or an `identity` (sign up). Your answer is written to the allow-list. The agent cannot approve. |
-| `fill_login` | fills username / password / TOTP into a page and optionally submits. Refuses unless the page's real origin is approved for that login. |
+| `fill_login` | fills username / password / TOTP and **custom vault fields** (API keys, client ids and secrets, certificates, checkboxes) into a page and optionally submits. Refuses unless the page's real origin is approved for that login. |
 | `fill_signup` | fills a registration form from an identity (name, email, username, phone, company, address, country dropdowns) plus a password, and optionally submits. By default it generates a strong password and **saves it to the vault as a new login before typing it**, then approves that login for the site so the agent can sign in later with `fill_login`. Or it reuses an approved existing login (`credentials: { login }`). Never ticks terms/consent boxes. |
+
+### Custom fields (API keys, secrets, ids)
+
+Custom fields on a vault login (Bitwarden: *Custom fields* on the item) are listed by `list_logins` by
+name and type only, and filled with `fill_login({ login, target, custom: { "Client Secret": "auto" } })`.
+`"auto"` finds the input whose label, name, id or placeholder contains the field name; or pass a CSS /
+XPath selector.
+
+| Vault field type | Goes into |
+|---|---|
+| text | text-like inputs, textareas, password inputs |
+| hidden | **password-type inputs only**, so it can't appear in a screenshot. Approve with "visible secrets" (`request_authorization(..., allow_visible_secrets: true)` or `agent-autofill allow ... --visible-secrets`) for sites whose key boxes are plain text |
+| boolean | checkboxes (set on or off) |
+
+In CI, use `AGENT_AUTOFILL_<NAME>_FIELD_<FIELD>` (text), `_SECRET_<FIELD>` (hidden) and `_FLAG_<FIELD>` (boolean).
 
 ### Identities (for sign-ups)
 

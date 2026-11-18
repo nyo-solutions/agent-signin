@@ -17,6 +17,8 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PW = path.join(os.homedir(), 'Library/Caches/ms-playwright');
 const chromium = fs.readdirSync(PW).filter((d) => /^chromium-\d+$/.test(d)).sort().map((d) => path.join(PW, d, 'chrome-mac/Chromium.app/Contents/MacOS/Chromium')).find(fs.existsSync);
 const SECRET_PW = 'S3cret-pass-XYZ!';
+const API_KEY = 'sk-test-SECRET-abc123';
+const PEM = '-----BEGIN TEST-----\nZmFrZQ==\n-----END TEST-----';
 const TOTP_SECRET = 'JBSWY3DPEHPK3PXP';
 
 const page = (body) => `<!doctype html><meta charset=utf-8><title>t</title>${body}`;
@@ -36,7 +38,13 @@ const SIGNUP = page(`<form method=post action=/submit>
   <label><input type=checkbox name=terms> I agree</label>
   <button>Create account</button></form>`);
 const IDENTITY = { first_name: 'Testa', last_name: 'Personovich', email: 'tester@example.com', username: 'tester1', country: 'Israel', phone: '+972500000000' };
-const FORBIDDEN = [SECRET_PW, 'alice@example.com', IDENTITY.email, IDENTITY.last_name, IDENTITY.phone];
+const FORBIDDEN = [API_KEY, 'ZmFrZQ==', SECRET_PW, 'alice@example.com', IDENTITY.email, IDENTITY.last_name, IDENTITY.phone];
+const APIKEYS = page(`<form method=post action=/submit>
+  <label for=acct>Account ID</label><input id=acct name=account>
+  <label for=key>API key</label><input id=key name=api_key type=password>
+  <label for=key2>Key (plain box)</label><input id=key2 name=plain type=text>
+  <label for=pem>Client certificate</label><textarea id=pem name=pem></textarea>
+  <label><input type=checkbox id=sandbox name=sandbox> Sandbox</label></form>`);
 const TRAP = page(`<form><input id=user type=text><input id=pass type=text name=password></form>`);
 
 function startSite() {
@@ -49,7 +57,7 @@ function startSite() {
       return;
     }
     res.setHeader('content-type', 'text/html');
-    res.end(req.url.startsWith('/otp') ? OTP : req.url.startsWith('/trap') ? TRAP : req.url.startsWith('/signup') ? SIGNUP : req.url.startsWith('/emailonly') ? LOGIN.replace('type=text', 'type=email') : LOGIN);
+    res.end(req.url.startsWith('/otp') ? OTP : req.url.startsWith('/trap') ? TRAP : req.url.startsWith('/signup') ? SIGNUP : req.url.startsWith('/apikeys') ? APIKEYS : req.url.startsWith('/emailonly') ? LOGIN.replace('type=text', 'type=email') : LOGIN);
   });
   return new Promise((r) => srv.listen(0, '127.0.0.1', () => r({ srv, port: srv.address().port, posts })));
 }
@@ -88,7 +96,8 @@ async function mcp(home) {
   const client = new Client({ name: 'test', version: '1' });
   await client.connect(new StdioClientTransport({
     command: path.join(REPO, 'bin/agent-autofill-mcp'),
-    env: { ...process.env, AGENT_AUTOFILL_HOME: home, AGENT_AUTOFILL_NO_DIALOG: '1', AGENT_AUTOFILL_DEMO_USERNAME: 'alice@example.com', AGENT_AUTOFILL_DEMO_PASSWORD: SECRET_PW, AGENT_AUTOFILL_DEMO_TOTP_SECRET: TOTP_SECRET, AGENT_AUTOFILL_IDENTITY_TESTER: JSON.stringify(IDENTITY) },
+    env: { ...process.env, AGENT_AUTOFILL_HOME: home, AGENT_AUTOFILL_NO_DIALOG: '1', AGENT_AUTOFILL_DEMO_USERNAME: 'alice@example.com', AGENT_AUTOFILL_DEMO_PASSWORD: SECRET_PW, AGENT_AUTOFILL_DEMO_TOTP_SECRET: TOTP_SECRET, AGENT_AUTOFILL_IDENTITY_TESTER: JSON.stringify(IDENTITY),
+      AGENT_AUTOFILL_DEMO_FIELD_ACCOUNT_ID: 'acct-123', AGENT_AUTOFILL_DEMO_SECRET_API_KEY: API_KEY, AGENT_AUTOFILL_DEMO_FIELD_PEM: PEM, AGENT_AUTOFILL_DEMO_FLAG_SANDBOX: 'true' },
   }));
   const call = async (name, args) => {
     const r = await client.callTool({ name, arguments: args });
@@ -99,9 +108,9 @@ async function mcp(home) {
   return { client, call };
 }
 
-function writePolicy(home, origins, signupOrigins = ['http://127.0.0.1:*']) {
+function writePolicy(home, origins, signupOrigins = ['http://127.0.0.1:*'], visible = false) {
   fs.mkdirSync(home, { recursive: true });
-  fs.writeFileSync(path.join(home, 'policy.yaml'), `vaults:\n  ci:\n    type: env\ngrants:\n  - vault: ci\n    item: demo\n    origins: ${JSON.stringify(origins)}\n  - kind: signup\n    vault: ci\n    item: tester\n    origins: ${JSON.stringify(signupOrigins)}\n`);
+  fs.writeFileSync(path.join(home, 'policy.yaml'), `vaults:\n  ci:\n    type: env\ngrants:\n  - vault: ci\n    item: demo\n    origins: ${JSON.stringify(origins)}\n${visible ? '    allow_visible_secrets: true\n' : ''}  - kind: signup\n    vault: ci\n    item: tester\n    origins: ${JSON.stringify(signupOrigins)}\n`);
 }
 
 test('e2e', { skip: !chromium && 'Playwright Chromium not installed', timeout: 120_000 }, async (t) => {
@@ -123,6 +132,8 @@ test('e2e', { skip: !chromium && 'Playwright Chromium not installed', timeout: 1
     const r = await call('list_logins', {});
     assert.equal(r.json.logins[0].login, 'demo');
     assert.deepEqual(r.json.logins[0].approved_origins, ['http://127.0.0.1:*']);
+    assert.deepEqual(r.json.logins.find((l) => l.login === 'demo').custom_fields.sort((a, b) => a.name.localeCompare(b.name)),
+      [{ name: 'account_id', type: 'text' }, { name: 'api_key', type: 'hidden' }, { name: 'pem', type: 'text' }, { name: 'sandbox', type: 'boolean' }]);
     assert.equal(r.json.identities[0].identity, 'tester');
     assert.deepEqual(r.json.identities[0].approved_signup_origins, ['http://127.0.0.1:*']);
     assert.ok(r.json.identities[0].has.includes('email'));
@@ -172,6 +183,33 @@ test('e2e', { skip: !chromium && 'Playwright Chromium not installed', timeout: 1
     // Non-loopback CDP endpoint refused
     r = await call('fill_login', { login: 'demo', target: { type: 'cdp', endpoint: 'http://10.1.2.3:9222' } });
     assert.ok(r.error && /allowed_hosts/.test(r.text));
+
+    // Custom fields: text, hidden (masked input), textarea, checkbox; auto-detected by label
+    await openPage(b.endpoint, `${base}/apikeys`);
+    const apiTarget = { type: 'cdp', endpoint: b.endpoint, url_contains: '/apikeys' };
+    r = await call('fill_login', { login: 'demo', target: apiTarget, custom: { account_id: 'auto', api_key: 'auto', pem: 'auto', sandbox: 'auto' } });
+    assert.ok(!r.error, r.text);
+    assert.deepEqual(r.json.filled, ['custom:account_id', 'custom:api_key', 'custom:pem', 'custom:sandbox']);
+    const val = (sel) => cdpEval(b.endpoint, '/apikeys', `(() => { const e = document.querySelector('${sel}'); return e.type === 'checkbox' ? e.checked : e.value; })()`);
+    assert.equal(await val('#acct'), 'acct-123');
+    assert.equal(await val('#key'), API_KEY);
+    assert.equal(await val('#pem'), PEM);
+    assert.equal(await val('#sandbox'), true);
+    assert.equal(await val('#key2'), '', 'username/password not filled when only custom is given');
+
+    // Hidden field refused into a visible text box, unless the approval allows visible secrets
+    await openPage(b.endpoint, `${base}/apikeys?2`);
+    const apiTarget2 = { type: 'cdp', endpoint: b.endpoint, url_contains: '/apikeys?2' };
+    r = await call('fill_login', { login: 'demo', target: apiTarget2, custom: { api_key: '#key2' } });
+    assert.ok(r.error && /masked inputs/.test(r.text), r.text);
+    assert.equal(await cdpEval(b.endpoint, '/apikeys?2', 'document.querySelector("#key2").value'), '');
+    r = await call('fill_login', { login: 'demo', target: apiTarget2, custom: { nope: 'auto' } });
+    assert.ok(r.error && /no custom field "nope".*"api_key"/.test(r.text), r.text);
+    writePolicy(home, ['http://127.0.0.1:*'], undefined, true);
+    r = await call('fill_login', { login: 'demo', target: apiTarget2, custom: { api_key: '#key2' } });
+    assert.ok(!r.error, r.text);
+    assert.equal(await cdpEval(b.endpoint, '/apikeys?2', 'document.querySelector("#key2").value'), API_KEY);
+    writePolicy(home, ['http://127.0.0.1:*']);
 
     // Signup with a generated password, then sign in with the saved login
     await openPage(b.endpoint, `${base}/signup`);
@@ -259,6 +297,13 @@ test('e2e', { skip: !chromium && 'Playwright Chromium not installed', timeout: 1
     assert.equal(s2.country, 'IL');
     assert.equal(s2.password, s2.password_confirm);
     generated.push(s2.password);
+
+    // Custom fields through the extension
+    await openPage(b.endpoint, `${base}/apikeys?ext`);
+    r = await call('fill_login', { login: 'demo', target: { type: 'chrome', url_contains: '/apikeys?ext' }, custom: { api_key: 'auto', sandbox: 'auto' } });
+    assert.ok(!r.error, r.text);
+    assert.equal(await cdpEval(b.endpoint, '/apikeys?ext', 'document.querySelector("#key").value'), API_KEY);
+    assert.equal(await cdpEval(b.endpoint, '/apikeys?ext', 'document.querySelector("#sandbox").checked'), true);
 
     // By tab id, wrong origin refused
     await openPage(b.endpoint, `http://localhost:${site.port}/login?ext2`);

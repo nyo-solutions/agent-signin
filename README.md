@@ -15,7 +15,7 @@ only learns which fields were filled.
 
 | Folder | What it is |
 |---|---|
-| [`agent-autofill/`](agent-autofill) | MCP server + Chrome extension. Tools: `list_logins`, `request_authorization` (a dialog on *your* screen writes the allow-list), `fill_login` (username, password, TOTP), `fill_signup` (registration forms from a vault identity, with a generated password saved to the vault first). Works with your everyday Chrome or a headless Chromium (Playwright/Puppeteer via CDP). |
+| [`agent-autofill/`](agent-autofill) | MCP server + Chrome extension. Tools: `list_logins`, `request_authorization` (a dialog on *your* screen writes the allow-list), `fill_login` (username, password, TOTP, custom fields such as API keys), `fill_signup` (registration forms from a vault identity, with a generated password saved to the vault first). Works with your everyday Chrome or a headless Chromium (Playwright/Puppeteer via CDP). |
 | [`agent-vault/`](agent-vault) | Self-hosted [Vaultwarden](https://github.com/dani-garcia/vaultwarden) on AWS Lambda + EFS (CDK), about $0–1/month, with backups, restore and Touch ID unlock on macOS. Optional: agent-autofill works with any Bitwarden-compatible vault, or environment variables in CI. |
 
 ## Highlights

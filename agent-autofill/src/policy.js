@@ -80,6 +80,11 @@ export function findGrant(policy, { vault, itemId, origin, kind = 'login', now =
   );
 }
 
+// Every live grant matching item + origin (a site can be covered by several, e.g. one with visible secrets).
+export function matchingGrants(policy, { vault, itemId, origin, kind = 'login', now = Date.now() }) {
+  return grantsForItem(policy, vault, itemId, kind, now).filter((g) => g.origins.some((p) => originMatches(p, origin)));
+}
+
 export function grantsForItem(policy, vault, itemId, kind = 'login', now = Date.now()) {
   return policy.grants.filter((g) => kindOf(g) === kind && g.vault === vault && (g.item === '*' || g.item === itemId) && live(g, now));
 }
@@ -87,7 +92,8 @@ export function grantsForItem(policy, vault, itemId, kind = 'login', now = Date.
 export function addGrant(policy, grant) {
   // Merge into an existing grant for the same item/submit/expiry so the file stays readable.
   const same = policy.grants.find(
-    (g) => kindOf(g) === kindOf(grant) && g.vault === grant.vault && g.item === grant.item && !g.expires_at && !grant.expires_at && g.allow_submit === grant.allow_submit,
+    (g) => kindOf(g) === kindOf(grant) && g.vault === grant.vault && g.item === grant.item && !g.expires_at && !grant.expires_at && g.allow_submit === grant.allow_submit &&
+      Boolean(g.allow_visible_secrets) === Boolean(grant.allow_visible_secrets),
   );
   if (same) {
     for (const o of grant.origins) if (!same.origins.includes(o)) same.origins.push(o);

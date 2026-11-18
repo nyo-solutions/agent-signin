@@ -32,5 +32,5 @@ export async function chromeTarget(target) {
 }
 
 export async function chromeFill(tab, req) {
-  return extensionRequest({ op: 'fill', tab_id: tab.tab_id, expected_origin: req.expectedOrigin, fields: req.fields, submit: req.submit, mode: req.mode });
+  return extensionRequest({ op: 'fill', tab_id: tab.tab_id, expected_origin: req.expectedOrigin, fields: req.fields, submit: req.submit, mode: req.mode, allow_visible_secrets: req.allowVisibleSecrets });
 }
