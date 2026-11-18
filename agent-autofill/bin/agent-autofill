@@ -1,0 +1,4 @@
+#!/bin/bash
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/share/fnm/aliases/default/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+exec node "$DIR/src/cli.js" "$@"

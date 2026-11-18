@@ -1,0 +1,3 @@
+# extension/manifest.json "key" is the extension PUBLIC key (pins the ID); test/policy.test.js is the RFC 6238 test vector.
+e031c14be1604c642f1583b3b28f2fd646628c04:extension/manifest.json:generic-api-key:6
+e031c14be1604c642f1583b3b28f2fd646628c04:test/policy.test.js:generic-api-key:42

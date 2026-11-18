@@ -1,0 +1,5 @@
+#!/bin/bash
+# MCP launcher for Claude Desktop / Claude Code (GUI apps get a bare PATH).
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/share/fnm/aliases/default/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+exec node "$DIR/src/server.js"
