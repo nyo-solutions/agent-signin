@@ -4,3 +4,5 @@
 14133a53b970a5985578d4d9cfa1728a18799ce1:agent-autofill/test/policy.test.js:generic-api-key:42
 agent-autofill/extension/manifest.json:generic-api-key:6
 agent-autofill/test/policy.test.js:generic-api-key:43
+# Fake test API key in an earlier version of agent-autofill/test/e2e.test.js (not a real secret).
+c5340408cf6bbf2cd06d69b4175d057f1873a31c:agent-autofill/test/e2e.test.js:generic-api-key:20

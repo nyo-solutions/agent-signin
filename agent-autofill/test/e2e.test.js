@@ -17,7 +17,7 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PW = path.join(os.homedir(), 'Library/Caches/ms-playwright');
 const chromium = fs.readdirSync(PW).filter((d) => /^chromium-\d+$/.test(d)).sort().map((d) => path.join(PW, d, 'chrome-mac/Chromium.app/Contents/MacOS/Chromium')).find(fs.existsSync);
 const SECRET_PW = 'S3cret-pass-XYZ!';
-const API_KEY = 'sk-test-SECRET-abc123';
+const API_KEY = 'fake-api-key-for-tests';
 const PEM = '-----BEGIN TEST-----\nZmFrZQ==\n-----END TEST-----';
 const TOTP_SECRET = 'JBSWY3DPEHPK3PXP';
 
