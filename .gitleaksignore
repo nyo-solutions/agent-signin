@@ -1,0 +1,6 @@
+# False positives: agent-autofill/extension/manifest.json "key" is the extension PUBLIC key (pins the extension ID);
+# agent-autofill/test/policy.test.js holds the published RFC 6238 test secret.
+14133a53b970a5985578d4d9cfa1728a18799ce1:agent-autofill/extension/manifest.json:generic-api-key:6
+14133a53b970a5985578d4d9cfa1728a18799ce1:agent-autofill/test/policy.test.js:generic-api-key:42
+agent-autofill/extension/manifest.json:generic-api-key:6
+agent-autofill/test/policy.test.js:generic-api-key:43
