@@ -1,0 +1,59 @@
+name: Remove vault (DELETES DATA)
+# Permanently deletes everything: the stacks, the EFS file system with all vault data,
+# the transfer bucket (incl. exports) and, if chosen, the AWS Backup snapshots.
+# Make an encrypted export from the web vault first (Tools > Export vault).
+on:
+  workflow_dispatch:
+    inputs:
+      confirm: { description: 'Type "delete vault.example.com" to permanently delete the vault', required: true }
+      delete_backups: { description: "Also delete AWS Backup snapshots (no way back)", type: boolean, default: false }
+permissions: { id-token: write, contents: read }
+concurrency: { group: agent-vault-aws, cancel-in-progress: false }
+jobs:
+  remove:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: aws } }
+    steps:
+      - name: Check confirmation
+        if: inputs.confirm != 'delete vault.example.com'
+        run: |
+          echo "::error::Confirmation text must be exactly: delete vault.example.com"
+          exit 1
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/aws-setup
+        with: { role-arn: "${{ vars.AWS_ROLE_ARN }}", zone-id: "${{ vars.AWS_ZONE_ID }}" }
+      - name: Find retained resources
+        run: |
+          source lib.sh
+          FS_ID=$(out AgentVaultData FileSystemId); BUCKET=$(out AgentVaultData TransferBucket)
+          [ -n "$FS_ID" ] || FS_ID=$(aws efs describe-file-systems --query "FileSystems[?Tags[?Key=='project' && Value=='agent-vault']].FileSystemId | [0]" --output text | grep -v '^None$' || true)
+          echo "FS_ID=$FS_ID" >> "$GITHUB_ENV"; echo "BUCKET=$BUCKET" >> "$GITHUB_ENV"
+          echo "File system: ${FS_ID:-none}  bucket: ${BUCKET:-none}"
+      - name: Destroy stacks
+        env: { ZONE_ID: "${{ vars.AWS_ZONE_ID }}" }
+        run: |
+          source lib.sh
+          stack_exists AgentVault && npx cdk destroy AgentVault -c zoneId="$ZONE_ID" --force
+          stack_exists AgentVaultData && npx cdk destroy AgentVaultData -c zoneId="$ZONE_ID" --force
+          true
+      - name: Delete file system
+        if: env.FS_ID != ''
+        run: |
+          for _ in $(seq 1 30); do
+            n=$(aws efs describe-mount-targets --file-system-id "$FS_ID" --query 'length(MountTargets)' --output text); [ "$n" = 0 ] && break; sleep 10
+          done
+          aws efs delete-file-system --file-system-id "$FS_ID" && echo "Deleted $FS_ID" >> "$GITHUB_STEP_SUMMARY"
+      - name: Delete transfer bucket
+        if: env.BUCKET != ''
+        run: aws s3 rb "s3://$BUCKET" --force && echo "Deleted bucket $BUCKET" >> "$GITHUB_STEP_SUMMARY"
+      - name: Delete AWS Backup snapshots
+        if: inputs.delete_backups && env.FS_ID != ''
+        run: |
+          ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+          ARN="arn:aws:elasticfilesystem:us-east-1:$ACCOUNT:file-system/$FS_ID"
+          aws backup list-recovery-points-by-resource --resource-arn "$ARN" --query 'RecoveryPoints[].[BackupVaultName,RecoveryPointArn]' --output text |
+            while read -r vault rp; do aws backup delete-recovery-point --backup-vault-name "$vault" --recovery-point-arn "$rp" && echo "Deleted $rp"; done
+          echo "Backup snapshots deleted" >> "$GITHUB_STEP_SUMMARY"
+      - name: Note kept snapshots
+        if: ${{ !inputs.delete_backups }}
+        run: echo "AWS Backup snapshots were kept (35-day retention) — restore possible from the AWS Backup console." >> "$GITHUB_STEP_SUMMARY"
