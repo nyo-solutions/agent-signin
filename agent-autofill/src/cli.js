@@ -37,10 +37,21 @@ function flags(args) {
   return out;
 }
 
+// A stable node path: the first `node` on PATH as-is (e.g. /opt/homebrew/bin/node), not the
+// versioned target it links to, so upgrading Node doesn't break the native host.
+function nodePath() {
+  if (process.env.AGENT_AUTOFILL_NODE) return process.env.AGENT_AUTOFILL_NODE;
+  for (const dir of (process.env.PATH || '').split(':')) {
+    const p = path.join(dir, 'node');
+    try { fs.accessSync(p, fs.constants.X_OK); return p; } catch {}
+  }
+  return process.execPath;
+}
+
 function install(f) {
   fs.mkdirSync(HOME, { recursive: true, mode: 0o700 });
   const wrapper = path.join(HOME, 'native-host.sh');
-  fs.writeFileSync(wrapper, `#!/bin/sh\n# Started by the browser for the Agent Autofill extension.\nexport AGENT_AUTOFILL_HOME='${HOME}'\nexec '${process.execPath}' '${path.join(REPO, 'src', 'host.js')}' "$@"\n`, { mode: 0o700 });
+  fs.writeFileSync(wrapper, `#!/bin/sh\n# Started by the browser for the Agent Autofill extension.\nexport AGENT_AUTOFILL_HOME='${HOME}'\nexec '${nodePath()}' '${path.join(REPO, 'src', 'host.js')}' "$@"\n`, { mode: 0o700 });
   const id = extensionId();
   const manifest = { name: NATIVE_HOST_NAME, description: 'Agent Autofill bridge', path: wrapper, type: 'stdio', allowed_origins: [`chrome-extension://${id}/`] };
   const dirs = f.dir

@@ -1,4 +1,4 @@
-import { Arn, CfnOutput, Duration, Stack, StackProps } from "aws-cdk-lib";
+import { Arn, ArnFormat, CfnOutput, Duration, Stack, StackProps } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as iam from "aws-cdk-lib/aws-iam";
 
@@ -41,12 +41,12 @@ export class GithubStack extends Stack {
     }));
     role.addToPolicy(new iam.PolicyStatement({
       actions: ["lambda:InvokeFunction"],
-      resources: [Arn.format({ service: "lambda", resource: "function", resourceName: "AgentVaultData-Migrate*", arnFormat: undefined }, this)],
+      resources: [Arn.format({ service: "lambda", resource: "function", resourceName: "AgentVaultData-Migrate*", arnFormat: ArnFormat.COLON_RESOURCE_NAME }, this)],
     }));
     // restore: recycle warm Vaultwarden instances after importing a backup.
     role.addToPolicy(new iam.PolicyStatement({
       actions: ["lambda:GetFunctionConfiguration", "lambda:UpdateFunctionConfiguration"],
-      resources: [Arn.format({ service: "lambda", resource: "function", resourceName: "AgentVault-Vaultwarden*", arnFormat: undefined }, this)],
+      resources: [Arn.format({ service: "lambda", resource: "function", resourceName: "AgentVault-Vaultwarden*", arnFormat: ArnFormat.COLON_RESOURCE_NAME }, this)],
     }));
     // remove-vault: delete the retained file system, transfer bucket and (optionally) backups.
     role.addToPolicy(new iam.PolicyStatement({
@@ -64,7 +64,7 @@ export class GithubStack extends Stack {
     }));
     role.addToPolicy(new iam.PolicyStatement({
       actions: ["backup:DeleteRecoveryPoint"],
-      resources: [Arn.format({ service: "backup", resource: "recovery-point", resourceName: "*", arnFormat: undefined }, this)],
+      resources: [Arn.format({ service: "backup", resource: "recovery-point", resourceName: "*", arnFormat: ArnFormat.COLON_RESOURCE_NAME }, this)],
     }));
 
     new CfnOutput(this, "RoleArn", { value: role.roleArn });
