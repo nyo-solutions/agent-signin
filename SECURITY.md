@@ -22,6 +22,10 @@ repository (Security tab), not in public issues. We aim to answer within a few w
   permissions they need.
 - A compromised site: whatever you approve for a site, that site receives.
 - `"*"` approvals: these switch off the origin check for that login or identity.
+- The vault scope (`folders`, `collections`, `exclude_*`) limits what *this tool* reads. The unlocked
+  vault session itself can read the whole account, so an agent with shell access could bypass the tool.
+  For hard isolation, give agents their **own vault account** that only receives the items you share
+  with it (for example an organization collection), and keep cards and personal items in your own account.
 
 ## Deployments (agent-vault)
 

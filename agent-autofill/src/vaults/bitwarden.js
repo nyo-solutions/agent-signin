@@ -5,19 +5,21 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { IDENTITY_FIELDS, fromBitwarden } from './identity-fields.js';
+import { describeScope, fieldAllowed, inScope, normalizeScope } from './bitwarden-scope.js';
 
 const run = promisify(execFile);
 
 // Bitwarden custom field types: 0 text, 1 hidden, 2 boolean, 3 linked (skipped: it points at username/password).
 const FIELD_TYPES = { 0: 'text', 1: 'hidden', 2: 'boolean' };
-function customMeta(fields = []) {
-  return (fields || []).filter((f) => f.name && FIELD_TYPES[f.type]).map((f) => ({ name: f.name, type: FIELD_TYPES[f.type] }));
+function customMeta(fields = [], scope) {
+  return (fields || []).filter((f) => f.name && FIELD_TYPES[f.type] && fieldAllowed(scope, f.name)).map((f) => ({ name: f.name, type: FIELD_TYPES[f.type] }));
 }
 
 export function create(cfg) {
   const bw = cfg.bw_bin || 'bw';
+  const scope = normalizeScope(cfg); // throws on a missing or unsafe scope
   let session;
-  let folderId;
+  let ids; // resolved folder / collection / organization ids
   let synced = 0;
 
   async function getSession() {
@@ -51,22 +53,41 @@ export function create(cfg) {
     synced = Date.now();
   }
 
-  async function resolveFolder() {
-    if (!cfg.folder) return undefined;
-    if (folderId) return folderId;
-    const folders = JSON.parse(await bwJson(['list', 'folders']));
-    const f = folders.find((x) => x.name === cfg.folder || x.id === cfg.folder);
-    if (!f) throw new Error(`bitwarden: folder "${cfg.folder}" not found`);
-    folderId = f.id;
-    return folderId;
+  async function resolveIds() {
+    if (ids) return ids;
+    const pick = async (what, refs) => {
+      if (!refs.length) return new Map();
+      const all = JSON.parse(await bwJson(['list', what]));
+      return new Map(refs.map((ref) => {
+        const hit = all.find((x) => x.id === ref) || all.find((x) => x.name === ref);
+        if (!hit) throw new Error(`bitwarden: ${what.replace(/s$/, '')} "${ref}" not found`);
+        return [ref, hit.id];
+      }));
+    };
+    const folders = await pick('folders', scope.folders);
+    const collections = await pick('collections', scope.collections);
+    const orgs = await pick('organizations', scope.organizations);
+    ids = {
+      folderIds: new Set(folders.values()), collectionIds: new Set(collections.values()), orgIds: new Set(orgs.values()),
+      saveFolderId: scope.saveFolder ? (folders.get(scope.saveFolder) ?? (await pick('folders', [scope.saveFolder])).get(scope.saveFolder)) : undefined,
+    };
+    return ids;
   }
 
+  // Ask bw only for the configured folders / collections / organizations, then
+  // filter again (types, exclusions) so nothing outside the scope reaches callers.
   async function allItems(force) {
     if (force) synced = 0;
     await sync();
-    const fid = await resolveFolder();
-    const items = JSON.parse(await bwJson(['list', 'items', ...(fid ? ['--folderid', fid] : [])]));
-    return items.filter((i) => !i.deletedDate);
+    const r = await resolveIds();
+    const queries = scope.all ? [[]] : [
+      ...[...r.folderIds].map((id) => ['--folderid', id]),
+      ...[...r.collectionIds].map((id) => ['--collectionid', id]),
+      ...[...r.orgIds].map((id) => ['--organizationid', id]),
+    ];
+    const byId = new Map();
+    for (const q of queries) for (const i of JSON.parse(await bwJson(['list', 'items', ...q]))) byId.set(i.id, i);
+    return [...byId.values()].filter((i) => inScope(i, scope, r));
   }
   const rawItems = async () => (await allItems()).filter((i) => i.type === 1);
   const rawIdentities = async () => (await allItems()).filter((i) => i.type === 4);
@@ -92,7 +113,7 @@ export function create(cfg) {
 
   return {
     type: 'bitwarden',
-    scope: cfg.folder ? `folder "${cfg.folder}"` : 'whole vault',
+    scope: describeScope(scope),
     async list() {
       // Map immediately so secret fields never leave this function.
       return (await rawItems()).map((i) => ({
@@ -102,7 +123,7 @@ export function create(cfg) {
         hasUsername: Boolean(i.login?.username),
         hasPassword: Boolean(i.login?.password),
         hasTotp: Boolean(i.login?.totp),
-        custom: customMeta(i.fields),
+        custom: customMeta(i.fields, scope),
       }));
     },
     async find(ref) {
@@ -112,7 +133,7 @@ export function create(cfg) {
     async listIdentities() {
       return (await rawIdentities()).map((i) => {
         const vals = fromBitwarden(i.identity);
-        return { id: i.id, name: i.name, has: IDENTITY_FIELDS.filter((f) => vals[f]) };
+        return { id: i.id, name: i.name, has: IDENTITY_FIELDS.filter((f) => vals[f] && fieldAllowed(scope, f)) };
       });
     },
     async findIdentity(ref) {
@@ -122,12 +143,19 @@ export function create(cfg) {
     async identity(id) {
       const item = (await rawIdentities()).find((i) => i.id === id);
       if (!item) throw new Error('bitwarden: identity not found in the configured scope');
-      return fromBitwarden(item.identity);
+      const vals = fromBitwarden(item.identity);
+      for (const f of Object.keys(vals)) if (!fieldAllowed(scope, f)) delete vals[f];
+      return vals;
     },
     async createLogin({ name, username, password, uris, notes }) {
-      const folderId = (await resolveFolder()) ?? null;
+      const r = await resolveIds();
+      const collectionId = !r.saveFolderId && !scope.all ? [...r.collectionIds][0] : undefined;
+      if (!r.saveFolderId && !collectionId && !scope.all) throw new Error('bitwarden: set save_folder (or a folder or collection) so new logins land inside the scope');
+      let organizationId = null;
+      if (collectionId) organizationId = JSON.parse(await bwJson(['list', 'collections'])).find((c) => c.id === collectionId)?.organizationId ?? null;
       const created = await bwCreate({
-        type: 1, name, notes, folderId, favorite: false, reprompt: 0,
+        type: 1, name, notes, folderId: r.saveFolderId ?? null, favorite: false, reprompt: 0,
+        ...(collectionId && { organizationId, collectionIds: [collectionId] }),
         login: { username, password, totp: null, uris: uris.map((uri) => ({ uri, match: null })) },
       });
       synced = 0; // make the new item visible to the next list()
@@ -143,6 +171,7 @@ export function create(cfg) {
       if (customNames?.length) {
         out.custom = {};
         for (const n of customNames) {
+          if (!fieldAllowed(scope, n)) continue;
           const f = (item.fields || []).find((x) => x.name === n && x.type !== 3);
           if (f) out.custom[n] = f.type === 2 ? String(f.value) === 'true' : f.value ?? '';
         }

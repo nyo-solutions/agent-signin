@@ -63,7 +63,13 @@ vaults:
     type: bitwarden                 # or: env (CI)
     bw_bin: /opt/homebrew/bin/bw
     session_keychain_service: agent-vault-bw-session
-    folder: ai                      # only this folder is ever fillable
+    folders: [ai]                   # what agents may reach: folders, collections and/or organizations
+    # collections: [Agents]         # organization collections (name or id)
+    # organizations: [NYO]          # whole organizations
+    # exclude_items: [bank.example] # never readable, even inside the scope
+    # exclude_fields: [Recovery codes, phone]   # custom or identity fields never read
+    # item_types: [login]           # default [login, identity]; cards, notes, SSH keys can't be enabled
+    # save_folder: ai               # where fill_signup saves new logins (default: first folder)
 default_vault: bitwarden
 cdp:
   allowed_hosts: [127.0.0.1, localhost, "::1"]
@@ -80,6 +86,13 @@ grants:                             # written by the dialog or `agent-autofill a
     origins: ["http://localhost:*", "https://*.sara.test"]
     allow_submit: true
 ```
+
+**Vault scope.** A Bitwarden vault must name what agents may reach (`folders`, `collections`,
+`organizations`, or `scope: all` to opt into the whole vault). Only **logins and identities** are ever
+read: credit cards, secure notes and SSH keys are not supported at all, so they can't be exposed even by
+mistake, and identity government IDs (SSN, passport, licence) are never read. `exclude_items` and
+`exclude_fields` carve out exceptions inside the scope. You can configure several vaults (e.g. a `test`
+and a `staging` folder) and agents pick one with the `vault` parameter.
 
 Origin patterns: exact `https://app.example.com`; `https://*.example.com` (domain + subdomains);
 `http://localhost:*` (any port); `https://*` (any HTTPS site); `*` (**any site**, which turns off the
