@@ -2,8 +2,8 @@
 // fillLogin, between the vault read and the hand-off to the browser channel.
 import { audit } from './audit.js';
 import { askUser } from './authorize.js';
-import { chromeFill, chromeTarget } from './channels/extension.js';
-import { cdpFill, cdpTarget } from './channels/cdp.js';
+import { chromeFill, chromeRead, chromeTarget } from './channels/extension.js';
+import { cdpFill, cdpRead, cdpTarget } from './channels/cdp.js';
 import { addGrant, findGrant, grantsForItem, matchingGrants, isWildcard, loadPolicy, normalizeOrigin, originMatches, parsePattern, pruneExpired, savePolicy, vaultName } from './policy.js';
 import { openVault } from './vaults/index.js';
 import { generatePassword } from './password.js';
@@ -248,6 +248,47 @@ export async function fillSignup({ identity, vault, target, credentials = 'gener
     throw err;
   }
   return { ...result, identity: idItem.name, ...(reused && { used_login: reused }), ...savedInfo, ...(resolved.tab_id != null && { tab_id: resolved.tab_id, profile: resolved.profile }), ...(resolved.target_id && { target_id: resolved.target_id }) };
+}
+
+// Read one element of the page and store its value in the vault. No approval:
+// saving only brings data into the vault (inside the configured scope).
+// Overwriting an existing value needs overwrite_allowed (default: save.overwrite_default,
+// or the vault's own overwrite_default).
+export async function saveFromPage({ target, xpath, attribute, vault, create, item_type = 'login', item, item_name, field_kind = 'custom', field_name, field_type, overwrite_allowed }) {
+  if (create && !item_name) throw new Error('item_name is required when create is true');
+  if (!create && !item) throw new Error('item (id or exact name) is required when create is false');
+  if (field_kind === 'custom' && !field_name) throw new Error('field_name is required for field_kind "custom"');
+  if (field_kind !== 'custom' && item_type !== 'login') throw new Error(`field_kind "${field_kind}" needs item_type "login"`);
+  if (field_kind !== 'custom' && field_type) throw new Error('field_type applies to custom fields only');
+  const policy = loadPolicy();
+  const vName = vaultName(policy, vault);
+  const vcfg = policy.vaults[vName];
+  const v = openVault(vName, vcfg);
+  if (!v.saveField) throw new Error(`vault ${vName} (${v.type}) cannot save values`);
+  const overwrite = overwrite_allowed ?? vcfg.overwrite_default ?? policy.save.overwrite_default;
+
+  const resolved = await resolveTarget(target, policy);
+  const origin = normalizeOrigin(resolved.url);
+  const req = { expectedOrigin: origin, selector: xpath, attribute };
+  const read = target.type === 'chrome' ? await chromeRead(resolved, req) : await cdpRead(target, resolved, req, policy.cdp.allowed_hosts);
+  if (!read?.ok) throw new Error(read?.error || 'could not read the element');
+
+  const label = field_kind === 'custom' ? `custom field "${field_name}"` : field_kind;
+  let saved;
+  try {
+    saved = await v.saveField({ create, item_type, item, item_name, uris: [origin], field_kind, field_name, field_type, value: read.value, overwrite });
+  } catch (e) {
+    audit({ action: 'save', vault: vName, item: item_name || item, field: label, origin, result: 'failed', error: e.message });
+    throw e;
+  } finally {
+    read.value = undefined;
+  }
+  audit({ action: 'save', vault: vName, item: saved.name, field: label, origin, result: saved.outcome, created: saved.created, overwrite });
+  return {
+    saved: saved.outcome !== 'unchanged', outcome: saved.outcome, created: saved.created, item: saved.name, item_id: saved.id, field: label, origin,
+    ...(resolved.tab_id != null && { tab_id: resolved.tab_id, profile: resolved.profile }),
+    ...(saved.created && item_type === 'login' && { note: `Saved. To fill it later, the user must approve "${saved.name}" for ${origin} (request_authorization).` }),
+  };
 }
 
 export { originMatches };

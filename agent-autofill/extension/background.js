@@ -2,6 +2,7 @@
 // agent-autofill host and fills pages when the host asks. The host is the only
 // thing that holds secret values; the AI agent never talks to this extension.
 import { fillPage } from './fill-page.js';
+import { readPage } from './read-page.js';
 
 const HOST = 'solutions.nyo.agent_autofill';
 let port = null;
@@ -73,6 +74,21 @@ async function handle(msg) {
         args: [{ expectedOrigin: msg.expected_origin, fields: msg.fields, submit: msg.submit, mode: msg.mode || 'login', allowVisibleSecrets: Boolean(msg.allow_visible_secrets) }],
       });
       if (!res || res.result == null) throw new Error('fill script did not run in the page');
+      return res.result;
+    }
+    case 'read': {
+      const tab = await chrome.tabs.get(msg.tab_id);
+      const origin = tab.url ? new URL(tab.url).origin : '';
+      if (origin !== msg.expected_origin) {
+        throw new Error(`tab origin is ${origin || 'unknown'}, expected ${msg.expected_origin}`);
+      }
+      const [res] = await chrome.scripting.executeScript({
+        target: { tabId: msg.tab_id },
+        world: 'ISOLATED',
+        func: readPage,
+        args: [{ expectedOrigin: msg.expected_origin, selector: msg.selector, attribute: msg.attribute }],
+      });
+      if (!res || res.result == null) throw new Error('read script did not run in the page');
       return res.result;
     }
     default:

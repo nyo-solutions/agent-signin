@@ -1,6 +1,7 @@
 // Headless / automated runs: fills through the Chrome DevTools Protocol of a
 // Chromium the automation started (Playwright, Puppeteer, --remote-debugging-port).
 import { fillPage } from '../../extension/fill-page.js';
+import { readPage } from '../../extension/read-page.js';
 
 function hostAllowed(hostname, allowed) {
   const h = hostname.replace(/^\[|\]$/g, '').toLowerCase();
@@ -74,7 +75,10 @@ export async function cdpTarget(target, allowedHosts) {
   }
 }
 
-export async function cdpFill(target, resolved, req, allowedHosts) {
+export const cdpFill = (target, resolved, req, allowedHosts) => cdpRun(fillPage, 'fill', target, resolved, req, allowedHosts);
+export const cdpRead = (target, resolved, req, allowedHosts) => cdpRun(readPage, 'read', target, resolved, req, allowedHosts);
+
+async function cdpRun(fn, what, target, resolved, req, allowedHosts) {
   const cdp = await Cdp.connect(await browserWsUrl(target.endpoint, allowedHosts));
   try {
     const { sessionId } = await cdp.send('Target.attachToTarget', { targetId: resolved.target_id, flatten: true });
@@ -85,13 +89,13 @@ export async function cdpFill(target, resolved, req, allowedHosts) {
     // Isolated world: the page's own scripts cannot hook the fill function.
     const { executionContextId } = await cdp.send('Page.createIsolatedWorld', { frameId: frameTree.frame.id, worldName: 'agent-autofill' }, sessionId);
     const { result, exceptionDetails } = await cdp.send('Runtime.callFunctionOn', {
-      functionDeclaration: fillPage.toString(),
+      functionDeclaration: fn.toString(),
       executionContextId,
       arguments: [{ value: req }],
       returnByValue: true,
       awaitPromise: true,
     }, sessionId);
-    if (exceptionDetails) throw new Error(`fill script failed: ${exceptionDetails.exception?.description?.split('\n')[0] || exceptionDetails.text}`);
+    if (exceptionDetails) throw new Error(`${what} script failed: ${exceptionDetails.exception?.description?.split('\n')[0] || exceptionDetails.text}`);
     await cdp.send('Target.detachFromTarget', { sessionId }).catch(() => {});
     return result.value;
   } finally {

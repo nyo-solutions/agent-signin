@@ -86,6 +86,10 @@ export async function chromeTarget(target, opts = {}) {
   );
 }
 
+export async function chromeRead(tab, req) {
+  return request(tab.socket, { op: 'read', tab_id: tab.tab_id, expected_origin: req.expectedOrigin, selector: req.selector, attribute: req.attribute });
+}
+
 export async function chromeFill(tab, req) {
   return request(tab.socket, {
     op: 'fill', tab_id: tab.tab_id, expected_origin: req.expectedOrigin, fields: req.fields, submit: req.submit,

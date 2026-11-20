@@ -38,13 +38,16 @@ const SIGNUP = page(`<form method=post action=/submit>
   <label><input type=checkbox name=terms> I agree</label>
   <button>Create account</button></form>`);
 const IDENTITY = { first_name: 'Testa', last_name: 'Personovich', email: 'tester@example.com', username: 'tester1', country: 'Israel', phone: '+972500000000' };
-const FORBIDDEN = [API_KEY, 'ZmFrZQ==', SECRET_PW, 'alice@example.com', IDENTITY.email, IDENTITY.last_name, IDENTITY.phone];
+const FORBIDDEN = ['ak_fake_shown_once_42', 'cs_fake_copy_button_77', 'pw_fake_masked_99', API_KEY, 'ZmFrZQ==', SECRET_PW, 'alice@example.com', IDENTITY.email, IDENTITY.last_name, IDENTITY.phone];
 const APIKEYS = page(`<form method=post action=/submit>
   <label for=acct>Account ID</label><input id=acct name=account>
   <label for=key>API key</label><input id=key name=api_key type=password>
   <label for=key2>Key (plain box)</label><input id=key2 name=plain type=text>
   <label for=pem>Client certificate</label><textarea id=pem name=pem></textarea>
   <label><input type=checkbox id=sandbox name=sandbox> Sandbox</label></form>`);
+const KEYS = page(`<h1>Your new API key</h1><code id=newkey>ak_fake_shown_once_42</code>
+  <button id=copy data-clipboard-text="cs_fake_copy_button_77">Copy client secret</button>
+  <input id=masked type=password value="pw_fake_masked_99">`);
 const TRAP = page(`<form><input id=user type=text><input id=pass type=text name=password></form>`);
 
 function startSite() {
@@ -57,7 +60,7 @@ function startSite() {
       return;
     }
     res.setHeader('content-type', 'text/html');
-    res.end(req.url.startsWith('/otp') ? OTP : req.url.startsWith('/trap') ? TRAP : req.url.startsWith('/signup') ? SIGNUP : req.url.startsWith('/apikeys') ? APIKEYS : req.url.startsWith('/emailonly') ? LOGIN.replace('type=text', 'type=email') : LOGIN);
+    res.end(req.url.startsWith('/otp') ? OTP : req.url.startsWith('/trap') ? TRAP : req.url.startsWith('/signup') ? SIGNUP : req.url.startsWith('/apikeys') ? APIKEYS : req.url.startsWith('/keys') ? KEYS : req.url.startsWith('/emailonly') ? LOGIN.replace('type=text', 'type=email') : LOGIN);
   });
   return new Promise((r) => srv.listen(0, '127.0.0.1', () => r({ srv, port: srv.address().port, posts })));
 }
@@ -108,9 +111,9 @@ async function mcp(home) {
   return { client, call };
 }
 
-function writePolicy(home, origins, signupOrigins = ['http://127.0.0.1:*'], visible = false) {
+function writePolicy(home, origins, signupOrigins = ['http://127.0.0.1:*'], visible = false, extra = '') {
   fs.mkdirSync(home, { recursive: true });
-  fs.writeFileSync(path.join(home, 'policy.yaml'), `vaults:\n  ci:\n    type: env\ngrants:\n  - vault: ci\n    item: demo\n    origins: ${JSON.stringify(origins)}\n${visible ? '    allow_visible_secrets: true\n' : ''}  - kind: signup\n    vault: ci\n    item: tester\n    origins: ${JSON.stringify(signupOrigins)}\n`);
+  fs.writeFileSync(path.join(home, 'policy.yaml'), `vaults:\n  ci:\n    type: env\ngrants:\n  - vault: ci\n    item: demo\n    origins: ${JSON.stringify(origins)}\n${visible ? '    allow_visible_secrets: true\n' : ''}  - kind: signup\n    vault: ci\n    item: tester\n    origins: ${JSON.stringify(signupOrigins)}\n${extra}`);
 }
 
 test('e2e', { skip: !chromium && 'Playwright Chromium not installed', timeout: 120_000 }, async (t) => {
@@ -123,9 +126,9 @@ test('e2e', { skip: !chromium && 'Playwright Chromium not installed', timeout: 1
 
   t.after(async () => { await client.close(); site.srv.close(); });
 
-  await t.test('tools list is exactly the four tools', async () => {
+  await t.test('tools list is exactly the five tools', async () => {
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map((x) => x.name).sort(), ['fill_login', 'fill_signup', 'list_logins', 'request_authorization']);
+    assert.deepEqual(tools.map((x) => x.name).sort(), ['fill_login', 'fill_signup', 'list_logins', 'request_authorization', 'save_from_page']);
   });
 
   await t.test('list_logins shows approvals, not secrets', async () => {
@@ -209,6 +212,48 @@ test('e2e', { skip: !chromium && 'Playwright Chromium not installed', timeout: 1
     r = await call('fill_login', { login: 'demo', target: apiTarget2, custom: { api_key: '#key2' } });
     assert.ok(!r.error, r.text);
     assert.equal(await cdpEval(b.endpoint, '/apikeys?2', 'document.querySelector("#key2").value'), API_KEY);
+    writePolicy(home, ['http://127.0.0.1:*']);
+
+    // save_from_page: create an item from text shown on the page, add from a copy button's attribute,
+    // refuse to overwrite unless allowed, honour the configured default
+    await openPage(b.endpoint, `${base}/keys`);
+    const keysTarget = { type: 'cdp', endpoint: b.endpoint, url_contains: '/keys' };
+    r = await call('save_from_page', { target: keysTarget, xpath: '//code[@id="newkey"]', create: true, item_name: 'keysite', field_name: 'API Key' });
+    assert.ok(!r.error, r.text);
+    assert.equal(r.json.created, true);
+    assert.equal(r.json.outcome, 'added');
+    assert.match(r.json.note, /must approve/);
+    r = await call('save_from_page', { target: keysTarget, xpath: '#copy', attribute: 'data-clipboard-text', create: false, item: 'keysite', field_name: 'Client Secret' });
+    assert.ok(!r.error && r.json.outcome === 'added', r.text);
+    r = await call('save_from_page', { target: keysTarget, xpath: '//input[@id="masked"]', create: false, item: 'keysite', field_kind: 'password' });
+    assert.ok(!r.error && r.json.outcome === 'added', r.text);
+    r = await call('list_logins', {});
+    const ks = r.json.logins.find((l) => l.login === 'keysite');
+    assert.deepEqual(ks.saved_sites, [base]);
+    assert.deepEqual(ks.custom_fields, [{ name: 'API Key', type: 'hidden' }, { name: 'Client Secret', type: 'hidden' }]);
+    assert.deepEqual(ks.approved_origins, [], 'saving does not approve filling');
+    r = await call('save_from_page', { target: keysTarget, xpath: '#copy', attribute: 'data-clipboard-text', create: false, item: 'keysite', field_name: 'API Key' });
+    assert.ok(r.error && /overwrite_allowed/.test(r.text), r.text);
+    r = await call('save_from_page', { target: keysTarget, xpath: '//code[@id="newkey"]', create: false, item: 'keysite', field_name: 'API Key' });
+    assert.ok(!r.error && r.json.outcome === 'unchanged', r.text);
+    r = await call('save_from_page', { target: keysTarget, xpath: '#copy', attribute: 'data-clipboard-text', create: false, item: 'keysite', field_name: 'API Key', overwrite_allowed: true });
+    assert.ok(!r.error && r.json.outcome === 'replaced', r.text);
+    writePolicy(home, ['http://127.0.0.1:*'], undefined, false, 'save:\n  overwrite_default: true\n');
+    r = await call('save_from_page', { target: keysTarget, xpath: '//code[@id="newkey"]', create: false, item: 'keysite', field_name: 'API Key' });
+    assert.ok(!r.error && r.json.outcome === 'replaced', `configured default allows overwrite: ${r.text}`);
+    r = await call('save_from_page', { target: keysTarget, xpath: '#copy', attribute: 'data-clipboard-text', create: false, item: 'keysite', field_name: 'API Key', overwrite_allowed: false });
+    assert.ok(r.error && /overwrite_allowed/.test(r.text), 'explicit false beats the default');
+    writePolicy(home, ['http://127.0.0.1:*']);
+    r = await call('save_from_page', { target: keysTarget, xpath: '//nope', create: false, item: 'keysite', field_name: 'X' });
+    assert.ok(r.error && /no element found/.test(r.text), r.text);
+    r = await call('save_from_page', { target: keysTarget, xpath: '//code', create: true, item_name: 'demo', field_name: 'X' });
+    assert.ok(r.error && /already exists/.test(r.text), r.text);
+    // The saved values fill correctly once the user approves the site
+    writePolicy(home, ['http://127.0.0.1:*'], undefined, false, '  - vault: ci\n    item: "*"\n    origins: ["http://127.0.0.1:*"]\n');
+    await openPage(b.endpoint, `${base}/apikeys?saved`);
+    r = await call('fill_login', { login: 'keysite', target: { type: 'cdp', endpoint: b.endpoint, url_contains: '/apikeys?saved' }, custom: { 'API Key': '#key' } });
+    assert.ok(!r.error, r.text);
+    assert.equal(await cdpEval(b.endpoint, '/apikeys?saved', 'document.querySelector("#key").value'), 'ak_fake_shown_once_42');
     writePolicy(home, ['http://127.0.0.1:*']);
 
     // Signup with a generated password, then sign in with the saved login
@@ -334,6 +379,11 @@ test('e2e', { skip: !chromium && 'Playwright Chromium not installed', timeout: 1
     r = await call('fill_login', { login: 'demo', target: { type: 'chrome', url_contains: 'profileA' } });
     assert.ok(!r.error, r.text);
     assert.equal(sockets().length, 1, 'stale socket of the closed profile is gone');
+
+    // save_from_page through the extension
+    await openPage(b.endpoint, `${base}/keys?ext`);
+    r = await call('save_from_page', { target: { type: 'chrome', url_contains: '/keys?ext' }, xpath: '//code[@id="newkey"]', create: true, item_name: 'keysite-ext', field_name: 'API Key' });
+    assert.ok(!r.error && r.json.created && typeof r.json.tab_id === 'number', r.text);
 
     // By tab id, wrong origin refused
     await openPage(b.endpoint, `http://localhost:${site.port}/login?ext2`);

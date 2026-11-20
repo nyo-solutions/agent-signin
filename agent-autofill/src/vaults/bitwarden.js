@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { IDENTITY_FIELDS, fromBitwarden } from './identity-fields.js';
 import { describeScope, fieldAllowed, inScope, normalizeScope } from './bitwarden-scope.js';
+import { applyField, newItem } from './save-field.js';
 
 const run = promisify(execFile);
 
@@ -45,6 +46,17 @@ export function create(cfg) {
       const msg = String(e.stderr || e.message).split('\n')[0];
       throw new Error(`bitwarden: bw ${args[0]} ${args[1] ?? ''} failed: ${msg}`);
     }
+  }
+
+  // Where new items go: save_folder, else the first collection of the scope.
+  async function placement() {
+    const r = await resolveIds();
+    if (scope.all) return { folderId: r.saveFolderId ?? null };
+    if (r.saveFolderId) return { folderId: r.saveFolderId };
+    const collectionId = [...r.collectionIds][0];
+    if (!collectionId) throw new Error('bitwarden: set save_folder (or a folder or collection) so new items land inside the scope');
+    const organizationId = JSON.parse(await bwJson(['list', 'collections'])).find((c) => c.id === collectionId)?.organizationId ?? null;
+    return { folderId: null, organizationId, collectionIds: [collectionId] };
   }
 
   async function sync() {
@@ -92,20 +104,22 @@ export function create(cfg) {
   const rawItems = async () => (await allItems()).filter((i) => i.type === 1);
   const rawIdentities = async () => (await allItems()).filter((i) => i.type === 4);
 
-  // `bw create item` reads base64 JSON from stdin, so the new password never
-  // appears in a process argument list.
-  function bwCreate(obj) {
+  // `bw create item` / `bw edit item <id>` read base64 JSON from stdin, so
+  // secrets never appear in a process argument list.
+  const bwCreate = (obj) => bwWrite(['create', 'item'], obj);
+  const bwEdit = (id, obj) => bwWrite(['edit', 'item', id], obj);
+  function bwWrite(cmd, obj) {
     return new Promise(async (resolve, reject) => {
       let env;
       try { env = { ...process.env, BW_SESSION: await getSession(), BW_NOINTERACTION: 'true' }; } catch (e) { return reject(e); }
-      const p = spawn(bw, ['create', 'item', '--nointeraction'], { env });
+      const p = spawn(bw, [...cmd, '--nointeraction'], { env });
       let out = '', err = '';
       p.stdout.on('data', (d) => (out += d));
       p.stderr.on('data', (d) => (err += d));
       p.on('error', reject);
       p.on('close', (code) => {
-        if (code !== 0) return reject(new Error(`bitwarden: bw create item failed: ${err.split('\n')[0]}`));
-        try { const r = JSON.parse(out); resolve({ id: r.id, name: r.name }); } catch { reject(new Error('bitwarden: unexpected output from bw create item')); }
+        if (code !== 0) return reject(new Error(`bitwarden: bw ${cmd[0]} item failed: ${err.split('\n')[0]}`));
+        try { const r = JSON.parse(out); resolve({ id: r.id, name: r.name }); } catch { reject(new Error(`bitwarden: unexpected output from bw ${cmd[0]} item`)); }
       });
       p.stdin.end(Buffer.from(JSON.stringify(obj)).toString('base64'));
     });
@@ -148,18 +162,34 @@ export function create(cfg) {
       return vals;
     },
     async createLogin({ name, username, password, uris, notes }) {
-      const r = await resolveIds();
-      const collectionId = !r.saveFolderId && !scope.all ? [...r.collectionIds][0] : undefined;
-      if (!r.saveFolderId && !collectionId && !scope.all) throw new Error('bitwarden: set save_folder (or a folder or collection) so new logins land inside the scope');
-      let organizationId = null;
-      if (collectionId) organizationId = JSON.parse(await bwJson(['list', 'collections'])).find((c) => c.id === collectionId)?.organizationId ?? null;
       const created = await bwCreate({
-        type: 1, name, notes, folderId: r.saveFolderId ?? null, favorite: false, reprompt: 0,
-        ...(collectionId && { organizationId, collectionIds: [collectionId] }),
+        type: 1, name, notes, favorite: false, reprompt: 0, ...(await placement()),
         login: { username, password, totp: null, uris: uris.map((uri) => ({ uri, match: null })) },
       });
       synced = 0; // make the new item visible to the next list()
       return created;
+    },
+    // save_from_page: create an item or merge one value into an existing one (inside the scope only).
+    async saveField({ create, item_type = 'login', item, item_name, uris, field_kind, field_name, field_type, value, overwrite }) {
+      if (field_kind === 'custom' && !fieldAllowed(scope, field_name)) throw new Error(`bitwarden: field "${field_name}" is excluded by exclude_fields`);
+      if (!scope.types.includes(item_type)) throw new Error(`bitwarden: item_types for this vault do not include ${item_type}`);
+      const pool = await (item_type === 'identity' ? rawIdentities() : rawItems());
+      if (create) {
+        if (!item_name) throw new Error('item_name is required when create is true');
+        const dup = pool.find((i) => i.name === item_name);
+        if (dup) throw new Error(`an item named "${item_name}" already exists (id ${dup.id}); use create: false with item "${dup.id}"`);
+        const obj = { ...newItem({ item_type, name: item_name, uris, notes: `Created by agent-autofill save_from_page on ${new Date().toISOString()}.` }), ...(await placement()) };
+        const outcome = applyField(obj, { field_kind, field_name, field_type, value, overwrite: false });
+        const created = await bwCreate(obj);
+        synced = 0;
+        return { id: created.id, name: created.name, outcome: outcome === 'unchanged' ? 'added' : outcome, created: true };
+      }
+      const existing = pool.find((i) => i.id === item) || pool.find((i) => i.name === item);
+      if (!existing) throw new Error(`bitwarden: ${item_type} "${item}" not found in the configured scope`);
+      const obj = structuredClone(existing);
+      const outcome = applyField(obj, { field_kind, field_name, field_type, value, overwrite });
+      if (outcome !== 'unchanged') { await bwEdit(existing.id, obj); synced = 0; }
+      return { id: existing.id, name: existing.name, outcome, created: false };
     },
     async secrets(id, kinds, customNames) {
       const item = (await rawItems()).find((i) => i.id === id); // re-checks the folder scope

@@ -17,7 +17,44 @@ agent ──fill_login("github.com", tab 123)──▶ MCP server ──secret�
 | `list_logins` | login and identity names, saved sites, approved origins, which fields exist. No secrets or personal details. |
 | `request_authorization` | shows **you** a macOS dialog (Deny / Allow 1 hour / Always allow) for a `login` (sign in) or an `identity` (sign up). Your answer is written to the allow-list. The agent cannot approve. |
 | `fill_login` | fills username / password / TOTP and **custom vault fields** (API keys, client ids and secrets, certificates, checkboxes) into a page and optionally submits. Refuses unless the page's real origin is approved for that login. |
+| `save_from_page` | saves a value shown on a page (API key, client secret, generated password, 2FA secret) straight into the vault: the agent points at the element, the value never passes through it. Creates an item or adds to an existing one; replacing a different value needs `overwrite_allowed` (default configurable). No approval needed. |
 | `fill_signup` | fills a registration form from an identity (name, email, username, phone, company, address, country dropdowns) plus a password, and optionally submits. By default it generates a strong password and **saves it to the vault as a new login before typing it**, then approves that login for the site so the agent can sign in later with `fill_login`. Or it reuses an approved existing login (`credentials: { login }`). Never ticks terms/consent boxes. |
+
+### Saving values from a page (`save_from_page`)
+
+When a site shows a new credential (an API key "shown once", a client secret behind a copy button, a 2FA
+setup secret), the agent points at the element instead of copying the value:
+
+```js
+save_from_page({
+  target: { type: "chrome", tab_id: 123, profile: "a629754e" },   // element locator
+  xpath: "//code[@id='api-key']",          // or a CSS selector; attribute: "data-clipboard-text" for copy buttons
+  create: false, item: "hubspot",          // vault locator: existing item (id or name)...
+  // create: true, item_name: "hubspot",   // ...or a new item (its website = this page's origin)
+  item_type: "login",                      // login (default) or identity
+  field_kind: "custom", field_name: "API Key", field_type: "hidden",   // or field_kind username | password | totp
+  overwrite_allowed: false,                // replace a different existing value? default from config
+})
+```
+
+The tool checks the page's real origin, reads the element inside the page (input value, otherwise its
+text, or the given attribute) and writes it to the vault. The agent gets back only where it went and the
+outcome: `added`, `replaced` or `unchanged`.
+
+- **No approval dialog**: saving only brings data into the vault, inside the configured scope (new items
+  go to `save_folder`). Filling a new item on a site later still needs approval. Every save is in the audit log.
+- **Overwriting** a different existing value needs `overwrite_allowed: true`. Default when the agent
+  doesn't say: `save.overwrite_default` (or a vault's own `overwrite_default`), `false` out of the box.
+  The replaced value of a password or hidden field is kept in the item's notes (last 5), so a good key
+  is never lost; agents never see notes.
+
+```yaml
+save:
+  overwrite_default: false     # true: agents may replace values unless they pass overwrite_allowed: false
+vaults:
+  bitwarden:
+    overwrite_default: true    # optional per-vault override
+```
 
 ### Custom fields (API keys, secrets, ids)
 

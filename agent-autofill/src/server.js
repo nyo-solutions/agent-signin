@@ -2,7 +2,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { fillLogin, fillSignup, listLogins, requestAuthorization } from './core.js';
+import { fillLogin, fillSignup, listLogins, requestAuthorization, saveFromPage } from './core.js';
 
 const server = new McpServer({ name: 'agent-autofill', version: '0.1.0' });
 
@@ -78,5 +78,30 @@ server.registerTool('fill_signup', {
     vault: z.string().optional(),
   },
 }, wrap((a) => fillSignup(a)));
+
+server.registerTool('save_from_page', {
+  title: 'Save a value shown on a page into the vault',
+  description:
+    'Save a credential the page shows (API key, client secret, account id, generated password, 2FA setup secret) into the vault without it passing through you. ' +
+    'You point at the element (XPath, or CSS); the tool checks the page\'s real origin, reads the element inside the page (input/textarea value, otherwise its text, or `attribute` such as data-clipboard-text), and writes it to the vault. You get back only where it was saved. ' +
+    'create: true makes a new item named item_name (its website is set to this page\'s origin); create: false adds to an existing item (item = id or exact name from list_logins). ' +
+    'field_kind "custom" saves into a custom field named field_name (field_type hidden by default, or text); "username" / "password" / "totp" set the login\'s own fields. ' +
+    'If the field already has a different value it is only replaced with overwrite_allowed: true (when omitted, the user\'s configured default applies); a replaced password or hidden value is kept in the item\'s notes. ' +
+    'No approval dialog is needed to save. Filling a newly created item later still needs the user\'s approval for the site.',
+  inputSchema: {
+    target: TARGET.describe('Element locator: where the page is (chrome: tab_id + optional profile; cdp: endpoint + target_id)'),
+    xpath: z.string().describe('XPath of the element holding the value (a CSS selector also works)'),
+    attribute: z.string().optional().describe('Read this attribute instead of the value/text, e.g. data-clipboard-text on a copy button'),
+    create: z.boolean().describe('true: create a new item; false: save into an existing item'),
+    item_type: z.enum(['login', 'identity']).optional().describe('Default login'),
+    item: z.string().optional().describe('Existing item id or exact name (create: false)'),
+    item_name: z.string().optional().describe('Name of the new item (create: true)'),
+    field_kind: z.enum(['custom', 'username', 'password', 'totp']).optional().describe('Default custom'),
+    field_name: z.string().optional().describe('Custom field name, e.g. "API Key" (field_kind custom)'),
+    field_type: z.enum(['hidden', 'text']).optional().describe('Custom field type; default hidden for a new field'),
+    overwrite_allowed: z.boolean().optional().describe('Replace an existing different value (default from the user\'s config, normally false)'),
+    vault: z.string().optional(),
+  },
+}, wrap((a) => saveFromPage(a)));
 
 await server.connect(new StdioServerTransport());

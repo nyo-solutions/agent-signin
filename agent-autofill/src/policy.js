@@ -5,13 +5,15 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { POLICY_PATH } from './paths.js';
 
-const DEFAULTS = { vaults: {}, default_vault: undefined, cdp: { allowed_hosts: ['127.0.0.1', 'localhost', '::1'] }, grants: [] };
+const DEFAULTS = { vaults: {}, default_vault: undefined, cdp: { allowed_hosts: ['127.0.0.1', 'localhost', '::1'] }, save: { overwrite_default: false }, grants: [] };
 
 export function loadPolicy(file = POLICY_PATH) {
   if (!fs.existsSync(file)) return structuredClone(DEFAULTS);
   const doc = YAML.parse(fs.readFileSync(file, 'utf8')) || {};
   const p = { ...structuredClone(DEFAULTS), ...doc };
   p.cdp = { ...DEFAULTS.cdp, ...(doc.cdp || {}) };
+  p.save = { ...DEFAULTS.save, ...(doc.save || {}) };
+  if (typeof p.save.overwrite_default !== 'boolean') throw new Error('save.overwrite_default must be true or false');
   p.grants = (doc.grants || []).map((g) => ({ allow_submit: true, ...g, origins: (g.origins || []).map(String) }));
   for (const g of p.grants) g.origins.forEach(parsePattern); // fail fast on a typo
   return p;

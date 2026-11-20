@@ -3,10 +3,14 @@
 //   <PREFIX><NAME>_URL (optional, shown as the login's site). Default prefix AGENT_AUTOFILL_.
 //   Custom fields: <PREFIX><NAME>_FIELD_<FIELD> (text), _SECRET_<FIELD> (hidden), _FLAG_<FIELD> (boolean, "true"); names lower-cased.
 //   Identities: <PREFIX>IDENTITY_<NAME>='{"first_name":"…","email":"…",…}' (JSON, keys as in identity-fields.js).
-//   createLogin keeps generated logins in memory for the life of the MCP server (ephemeral CI accounts).
+//   Logins created by fill_signup / save_from_page live in memory for the life of the MCP server
+//   (ephemeral CI accounts); env-defined logins are read-only.
 import crypto from 'node:crypto';
 import { totp } from '../totp.js';
 import { IDENTITY_FIELDS } from './identity-fields.js';
+import { applyField, newItem } from './save-field.js';
+
+const TYPE_NAME = { 0: 'text', 1: 'hidden', 2: 'boolean' };
 
 export function create(cfg) {
   const prefix = cfg.prefix || 'AGENT_AUTOFILL_';
@@ -25,7 +29,7 @@ export function create(cfg) {
     const type = m && { FIELD: 'text', SECRET: 'hidden', FLAG: 'boolean' }[m[1]];
     return m ? [{ name: m[2].toLowerCase(), type, value: type === 'boolean' ? process.env[k] === 'true' : process.env[k] }] : [];
   });
-  const created = new Map(); // id -> { name, username, password, uris }
+  const created = new Map(); // id -> item in Bitwarden JSON shape
   const idPrefix = `${prefix}IDENTITY_`;
   const identities = () => Object.keys(process.env).filter((k) => k.startsWith(idPrefix)).map((k) => {
     const name = k.slice(idPrefix.length).toLowerCase();
@@ -37,7 +41,11 @@ export function create(cfg) {
     type: 'env',
     scope: `env ${prefix}*`,
     async list() {
-      const mem = [...created.entries()].map(([id, c]) => ({ id, name: c.name, uris: c.uris, hasUsername: Boolean(c.username), hasPassword: true, hasTotp: false }));
+      const mem = [...created.entries()].filter(([, c]) => c.type === 1).map(([id, c]) => ({
+        id, name: c.name, uris: (c.login.uris || []).map((u) => u.uri),
+        hasUsername: Boolean(c.login.username), hasPassword: Boolean(c.login.password), hasTotp: Boolean(c.login.totp),
+        custom: (c.fields || []).map((f) => ({ name: f.name, type: TYPE_NAME[f.type] })),
+      }));
       return mem.concat(names().filter((n) => !n.startsWith('IDENTITY_')).map((n) => ({
         id: n.toLowerCase(),
         name: n.toLowerCase(),
@@ -61,8 +69,28 @@ export function create(cfg) {
     },
     async createLogin({ name, username, password, uris }) {
       const id = `generated-${crypto.randomUUID()}`;
-      created.set(id, { name, username, password, uris });
+      const item = newItem({ item_type: 'login', name, uris });
+      Object.assign(item.login, { username, password });
+      created.set(id, { ...item, id });
       return { id, name };
+    },
+    async saveField({ create, item_type = 'login', item, item_name, uris, field_kind, field_name, field_type, value, overwrite }) {
+      if (item_type !== 'login') throw new Error('env: only logins can be saved');
+      if (create) {
+        if (!item_name) throw new Error('item_name is required when create is true');
+        if ((await this.list()).some((i) => i.name === item_name)) throw new Error(`an item named "${item_name}" already exists; use create: false`);
+        const id = `saved-${crypto.randomUUID()}`;
+        const obj = { ...newItem({ item_type, name: item_name, uris }), id };
+        applyField(obj, { field_kind, field_name, field_type, value, overwrite: false });
+        created.set(id, obj);
+        return { id, name: item_name, outcome: 'added', created: true };
+      }
+      const hit = [...created.values()].find((c) => c.id === item || c.name === item);
+      if (!hit) throw new Error(`env: "${item}" is not a login created during this run (env-defined logins are read-only)`);
+      const copy = structuredClone(hit);
+      const outcome = applyField(copy, { field_kind, field_name, field_type, value, overwrite });
+      created.set(hit.id, copy);
+      return { id: hit.id, name: hit.name, outcome, created: false };
     },
     async find(ref) {
       const all = await this.list();
@@ -71,7 +99,12 @@ export function create(cfg) {
     async secrets(id, kinds, customNames) {
       if (created.has(id)) {
         const c = created.get(id);
-        return { ...(kinds.includes('username') && { username: c.username }), ...(kinds.includes('password') && { password: c.password }) };
+        return {
+          ...(kinds.includes('username') && { username: c.login.username ?? undefined }),
+          ...(kinds.includes('password') && { password: c.login.password ?? undefined }),
+          ...(kinds.includes('totp') && { totp: c.login.totp ? totp(c.login.totp) : undefined }),
+          ...(customNames?.length && { custom: Object.fromEntries((c.fields || []).filter((f) => customNames.includes(f.name)).map((f) => [f.name, f.value])) }),
+        };
       }
       const n = names().find((x) => x.toLowerCase() === id);
       if (!n) throw new Error('env: login not found');
