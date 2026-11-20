@@ -276,9 +276,9 @@ test('e2e', { skip: !chromium && 'Playwright Chromium not installed', timeout: 1
     const ext = path.join(REPO, 'extension');
     const b = await launch(prof, [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`]);
     t2.after(() => b.proc.kill());
-    const sock = path.join(home, 'run/bridge.sock');
-    for (let i = 0; i < 100 && !fs.existsSync(sock); i++) await new Promise((r) => setTimeout(r, 100));
-    assert.ok(fs.existsSync(sock), 'extension connected to the native host');
+    const sockets = () => { try { return fs.readdirSync(path.join(home, 'run')).filter((n) => /^bridge-.+\.sock$/.test(n)); } catch { return []; } };
+    const waitSockets = async (n) => { for (let i = 0; i < 100 && sockets().length < n; i++) await new Promise((r) => setTimeout(r, 100)); return sockets(); };
+    assert.equal((await waitSockets(1)).length, 1, 'extension connected to the native host with a per-profile socket');
     await openPage(b.endpoint, `${base}/login?ext`);
 
     let r = await call('fill_login', { login: 'demo', target: { type: 'chrome', url_contains: '/login?ext' }, submit: true });
@@ -304,6 +304,36 @@ test('e2e', { skip: !chromium && 'Playwright Chromium not installed', timeout: 1
     assert.ok(!r.error, r.text);
     assert.equal(await cdpEval(b.endpoint, '/apikeys?ext', 'document.querySelector("#key").value'), API_KEY);
     assert.equal(await cdpEval(b.endpoint, '/apikeys?ext', 'document.querySelector("#sandbox").checked'), true);
+
+    // A second Chrome profile with the extension: each gets its own socket, fills are routed
+    const prof2 = path.join(tmp, 'ext2');
+    execFileSync(path.join(REPO, 'bin/agent-autofill'), ['install', '--dir', path.join(prof2, 'NativeMessagingHosts'), '--quiet'], { env: { ...process.env, AGENT_AUTOFILL_HOME: home } });
+    const b2 = await launch(prof2, [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`]);
+    assert.equal((await waitSockets(2)).length, 2, 'two profiles, two sockets');
+    await openPage(b.endpoint, `${base}/login?profileA`);
+    await openPage(b2.endpoint, `${base}/login?profileB`);
+    const rA = await call('fill_login', { login: 'demo', target: { type: 'chrome', url_contains: 'profileA' } });
+    const rB = await call('fill_login', { login: 'demo', target: { type: 'chrome', url_contains: 'profileB' } });
+    assert.ok(!rA.error && !rB.error, rA.text + rB.text);
+    assert.notEqual(rA.json.profile, rB.json.profile);
+    assert.equal(await cdpEval(b.endpoint, 'profileA', 'document.querySelector("#pass").value'), SECRET_PW);
+    assert.equal(await cdpEval(b2.endpoint, 'profileB', 'document.querySelector("#pass").value'), SECRET_PW);
+    // The same page open in both profiles is ambiguous until a profile is named
+    await openPage(b.endpoint, `${base}/login?both`);
+    await openPage(b2.endpoint, `${base}/login?both`);
+    r = await call('fill_login', { login: 'demo', target: { type: 'chrome', url_contains: '?both' } });
+    assert.ok(r.error && /matches in 2 Chrome profiles/.test(r.text), r.text);
+    assert.ok(!r.text.includes('/login?both'), 'ambiguity message shows origins, not full URLs');
+    r = await call('fill_login', { login: 'demo', target: { type: 'chrome', url_contains: '?both', profile: rB.json.profile } });
+    assert.ok(!r.error, r.text);
+    assert.equal(await cdpEval(b2.endpoint, '?both', 'document.querySelector("#pass").value'), SECRET_PW);
+    assert.equal(await cdpEval(b.endpoint, '?both', 'document.querySelector("#pass").value'), '', 'the other profile was not touched');
+    // Closing a profile removes its socket (or the next request cleans it up)
+    b2.proc.kill('SIGKILL');
+    await new Promise((res) => setTimeout(res, 1500));
+    r = await call('fill_login', { login: 'demo', target: { type: 'chrome', url_contains: 'profileA' } });
+    assert.ok(!r.error, r.text);
+    assert.equal(sockets().length, 1, 'stale socket of the closed profile is gone');
 
     // By tab id, wrong origin refused
     await openPage(b.endpoint, `http://localhost:${site.port}/login?ext2`);

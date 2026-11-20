@@ -1,21 +1,20 @@
-// Talks to the Chrome extension through the native host's local socket.
+// Talks to the Chrome extension(s) through the native hosts' local sockets.
+// Every Chrome profile with the extension has its own host and socket
+// (run/bridge-<profile>.sock); requests go to the profile that has the tab.
+import fs from 'node:fs';
 import net from 'node:net';
-import { SOCKET_PATH } from '../paths.js';
+import path from 'node:path';
+import { RUN_DIR } from '../paths.js';
 
-export function extensionRequest(msg, { timeoutMs = 20_000, socketPath = SOCKET_PATH } = {}) {
+const NOT_CONNECTED = 'Chrome extension is not connected: open Chrome with the Agent Autofill extension enabled (run `agent-autofill doctor`)';
+
+function request(socketPath, msg, timeoutMs = 20_000) {
   return new Promise((resolve, reject) => {
     const sock = net.createConnection(socketPath);
     let buf = '';
-    const timer = setTimeout(() => { sock.destroy(); reject(new Error('Chrome extension did not answer in time')); }, timeoutMs);
+    const timer = setTimeout(() => { sock.destroy(); reject(Object.assign(new Error('Chrome extension did not answer in time'), { code: 'TIMEOUT' })); }, timeoutMs);
     const done = (fn, v) => { clearTimeout(timer); sock.end(); fn(v); };
-    sock.on('error', (e) => {
-      clearTimeout(timer);
-      reject(new Error(
-        e.code === 'ENOENT' || e.code === 'ECONNREFUSED'
-          ? 'Chrome extension is not connected: open Chrome with the Agent Autofill extension enabled (run `agent-autofill doctor`)'
-          : `extension bridge: ${e.message}`,
-      ));
-    });
+    sock.on('error', (e) => { clearTimeout(timer); reject(e); });
     sock.on('data', (d) => {
       buf += d;
       const nl = buf.indexOf('\n');
@@ -27,10 +26,69 @@ export function extensionRequest(msg, { timeoutMs = 20_000, socketPath = SOCKET_
   });
 }
 
-export async function chromeTarget(target) {
-  return extensionRequest({ op: 'resolve_tab', tab_id: target.tab_id, url_contains: target.url_contains });
+const profileOf = (socketPath) => path.basename(socketPath).replace(/^bridge-/, '').replace(/\.sock$/, '');
+
+// Live profiles. Sockets left behind by closed profiles are removed.
+export async function connectedProfiles({ runDir = RUN_DIR } = {}) {
+  let names = [];
+  try { names = fs.readdirSync(runDir).filter((n) => /^bridge(-.+)?\.sock$/.test(n)); } catch { return []; }
+  const checks = await Promise.all(names.map(async (n) => {
+    const p = path.join(runDir, n);
+    try {
+      const info = await request(p, { op: 'ping' }, 3000);
+      return { profile: profileOf(p), socket: p, version: info.version };
+    } catch (e) {
+      if (e.code === 'ECONNREFUSED' || e.code === 'ENOENT') { try { fs.unlinkSync(p); } catch {} }
+      return null;
+    }
+  }));
+  return checks.filter(Boolean);
+}
+
+export async function extensionRequest(msg, opts = {}) {
+  const [first] = await connectedProfiles(opts);
+  if (!first) throw new Error(NOT_CONNECTED);
+  return request(first.socket, msg, opts.timeoutMs);
+}
+
+const originOf = (u) => { try { return new URL(u).origin; } catch { return 'unknown'; } };
+
+// Find the tab across all connected profiles.
+export async function chromeTarget(target, opts = {}) {
+  let profiles = await connectedProfiles(opts);
+  if (!profiles.length) throw new Error(NOT_CONNECTED);
+  if (target.profile) {
+    profiles = profiles.filter((p) => p.profile === target.profile);
+    if (!profiles.length) throw new Error(`Chrome profile "${target.profile}" is not connected`);
+  }
+  const results = await Promise.all(profiles.map(async (p) => {
+    try {
+      const r = await request(p.socket, { op: 'resolve_tab', tab_id: target.tab_id, url_contains: target.url_contains });
+      return { ...r, profile: p.profile, socket: p.socket };
+    } catch (e) {
+      return { error: e.message, profile: p.profile };
+    }
+  }));
+  let hits = results.filter((r) => !r.error);
+  if (target.tab_id != null && target.url_contains) hits = hits.filter((h) => h.url.includes(target.url_contains));
+  if (hits.length > 1 && target.tab_id == null && !target.url_contains) {
+    const focused = hits.filter((h) => h.focused); // "active tab": the profile window you're using
+    if (focused.length) hits = focused;
+  }
+  if (hits.length === 1) return hits[0];
+  if (!hits.length) {
+    const why = [...new Set(results.map((r) => r.error))].join('; ');
+    throw new Error(`no matching tab in ${profiles.length} connected Chrome profile(s): ${why}`);
+  }
+  throw new Error(
+    `the tab matches in ${hits.length} Chrome profiles: ${hits.map((h) => `profile ${h.profile} (tab ${h.tab_id}, ${originOf(h.url)})`).join('; ')}. ` +
+      'Pass target.profile, or a url_contains that only one of them matches.',
+  );
 }
 
 export async function chromeFill(tab, req) {
-  return extensionRequest({ op: 'fill', tab_id: tab.tab_id, expected_origin: req.expectedOrigin, fields: req.fields, submit: req.submit, mode: req.mode, allow_visible_secrets: req.allowVisibleSecrets });
+  return request(tab.socket, {
+    op: 'fill', tab_id: tab.tab_id, expected_origin: req.expectedOrigin, fields: req.fields, submit: req.submit,
+    mode: req.mode, allow_visible_secrets: req.allowVisibleSecrets,
+  });
 }

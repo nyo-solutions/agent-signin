@@ -140,7 +140,7 @@ export async function fillLogin({ login, vault, target, fields, custom, submit =
   }
   audit({ action: 'fill', vault: vName, login: item.name, origin, channel: target.type, result: result?.ok ? 'filled' : 'failed', fields: result?.filled, submitted: result?.submitted });
   if (!result?.ok) throw new Error(result?.error || 'fill failed');
-  return { ...result, login: item.name, ...(resolved.tab_id != null && { tab_id: resolved.tab_id }), ...(resolved.target_id && { target_id: resolved.target_id }) };
+  return { ...result, login: item.name, ...(resolved.tab_id != null && { tab_id: resolved.tab_id, profile: resolved.profile }), ...(resolved.target_id && { target_id: resolved.target_id }) };
 }
 
 async function resolveTarget(target, policy) {
@@ -247,7 +247,7 @@ export async function fillSignup({ identity, vault, target, credentials = 'gener
     const err = new Error(`${result?.error || 'fill failed'}${saved ? `. (The generated login "${saved.name}" is already saved in the vault.)` : ''}`);
     throw err;
   }
-  return { ...result, identity: idItem.name, ...(reused && { used_login: reused }), ...savedInfo, ...(resolved.tab_id != null && { tab_id: resolved.tab_id }), ...(resolved.target_id && { target_id: resolved.target_id }) };
+  return { ...result, identity: idItem.name, ...(reused && { used_login: reused }), ...savedInfo, ...(resolved.tab_id != null && { tab_id: resolved.tab_id, profile: resolved.profile }), ...(resolved.target_id && { target_id: resolved.target_id }) };
 }
 
 export { originMatches };

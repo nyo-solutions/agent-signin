@@ -6,7 +6,19 @@ import { fillPage } from './fill-page.js';
 const HOST = 'solutions.nyo.agent_autofill';
 let port = null;
 
-function connect() {
+// A random id per Chrome profile (stored in this profile's extension storage), so each
+// profile gets its own bridge socket and the tool can tell profiles apart.
+async function profileId() {
+  const { profileId: id } = await chrome.storage.local.get('profileId');
+  if (id) return id;
+  const fresh = crypto.randomUUID().slice(0, 8);
+  await chrome.storage.local.set({ profileId: fresh });
+  return fresh;
+}
+
+async function connect() {
+  if (port) return;
+  const id = await profileId();
   if (port) return;
   try {
     port = chrome.runtime.connectNative(HOST);
@@ -14,6 +26,7 @@ function connect() {
     port = null;
     return;
   }
+  port.postMessage({ type: 'hello', profile_id: id, version: chrome.runtime.getManifest().version });
   port.onMessage.addListener((msg) => {
     handle(msg).then(
       (result) => port?.postMessage({ seq: msg.seq, ok: true, result }),
@@ -44,7 +57,8 @@ async function handle(msg) {
       return { version: chrome.runtime.getManifest().version };
     case 'resolve_tab': {
       const tab = await resolveTab(msg);
-      return { tab_id: tab.id, url: tab.url || '' };
+      const win = await chrome.windows.get(tab.windowId).catch(() => null);
+      return { tab_id: tab.id, url: tab.url || '', focused: Boolean(win?.focused && tab.active) };
     }
     case 'fill': {
       const tab = await chrome.tabs.get(msg.tab_id);
@@ -66,8 +80,8 @@ async function handle(msg) {
   }
 }
 
-chrome.runtime.onStartup.addListener(connect);
-chrome.runtime.onInstalled.addListener(connect);
+chrome.runtime.onStartup.addListener(() => void connect());
+chrome.runtime.onInstalled.addListener(() => void connect());
 chrome.alarms.create('reconnect', { periodInMinutes: 0.5 });
-chrome.alarms.onAlarm.addListener((a) => a.name === 'reconnect' && connect());
-connect();
+chrome.alarms.onAlarm.addListener((a) => a.name === 'reconnect' && void connect());
+void connect();

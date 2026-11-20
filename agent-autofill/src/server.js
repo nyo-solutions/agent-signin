@@ -34,7 +34,7 @@ server.registerTool('request_authorization', {
 }, wrap((a) => requestAuthorization(a)));
 
 const TARGET = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('chrome'), tab_id: z.number().int().optional(), url_contains: z.string().optional() }),
+  z.object({ type: z.literal('chrome'), tab_id: z.number().int().optional(), url_contains: z.string().optional(), profile: z.string().optional().describe('Chrome profile id from an earlier result, when several profiles are connected') }),
   z.object({ type: z.literal('cdp'), endpoint: z.string(), target_id: z.string().optional(), url_contains: z.string().optional() }),
 ]);
 const selector = z.string().describe('CSS selector, XPath (starts with / or "xpath="), or "auto" to detect');
@@ -42,7 +42,7 @@ server.registerTool('fill_login', {
   title: 'Fill a login form from the vault',
   description:
     "Fill a sign-in form with a login the user approved for this site. The tool reads the secret from the vault and types it into the page itself; you only get back which fields were filled. It checks the page's real origin with the browser and refuses if the login is not approved there (then use request_authorization). " +
-    "target.type 'chrome' = the user's Chrome through the Agent Autofill extension (tab_id from your browser tool, or url_contains, default the active tab); 'cdp' = a Chromium started by automation, at a local DevTools endpoint such as http://127.0.0.1:9222. " +
+    "target.type 'chrome' = the user's Chrome through the Agent Autofill extension (tab_id from your browser tool, or url_contains, default the active tab; with several Chrome profiles the tool finds the profile that has the tab, and asks for target.profile only if it is ambiguous); 'cdp' = a Chromium started by automation, at a local DevTools endpoint such as http://127.0.0.1:9222. " +
     'fields defaults to username + password, auto-detected (or nothing, when only custom is given). For a one-time-code page pass only { "totp": "auto" }. ' +
     'custom fills the login\'s custom vault fields by name (list_logins shows names and types): text fields go into text inputs or textareas, boolean fields set checkboxes, hidden fields (API keys, secrets) only go into password-type inputs unless the user approved visible secrets for this site. Passwords only go into password-type inputs.',
   inputSchema: {

@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { extensionRequest } from './channels/extension.js';
+import { connectedProfiles } from './channels/extension.js';
 import { addGrant, isWildcard, loadPolicy, normalizeOrigin, parsePattern, pruneExpired, savePolicy, vaultName } from './policy.js';
-import { HOME, NATIVE_HOST_NAME, POLICY_PATH, SOCKET_PATH } from './paths.js';
+import { HOME, NATIVE_HOST_NAME, POLICY_PATH, RUN_DIR } from './paths.js';
 import { openVault } from './vaults/index.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -81,7 +81,9 @@ async function doctor() {
   }
   const chromeManifest = path.join(os.homedir(), 'Library', 'Application Support', BROWSER_DIRS.chrome, 'NativeMessagingHosts', `${NATIVE_HOST_NAME}.json`);
   line(fs.existsSync(chromeManifest), `Chrome native host manifest ${chromeManifest}`);
-  try { const r = await extensionRequest({ op: 'ping' }, { timeoutMs: 3000 }); line(true, `Chrome extension connected (v${r.version}, id ${extensionId()})`); } catch (e) { line(false, e.message); }
+  const profiles = await connectedProfiles();
+  if (!profiles.length) line(false, 'Chrome extension is not connected: open Chrome with the Agent Autofill extension enabled');
+  for (const p of profiles) line(true, `Chrome profile ${p.profile} connected (extension v${p.version}, id ${extensionId()})`);
   process.exitCode = bad ? 1 : 0;
 }
 
@@ -140,7 +142,7 @@ function list() {
 
 const [cmd, ...rest] = process.argv.slice(2);
 const f = flags(rest);
-const cmds = { install, doctor, allow, revoke, list, 'extension-id': () => console.log(extensionId()), paths: () => console.log({ HOME, POLICY_PATH, SOCKET_PATH, EXT_DIR }) };
+const cmds = { install, doctor, allow, revoke, list, 'extension-id': () => console.log(extensionId()), paths: () => console.log({ HOME, POLICY_PATH, RUN_DIR, EXT_DIR }) };
 if (!cmds[cmd]) {
   console.log('usage: agent-autofill <install [--browsers chrome,chromium,brave,edge] | doctor | list | allow <login|*> <origin...> | revoke <login> [origin] | extension-id | paths>');
   process.exitCode = cmd ? 1 : 0;

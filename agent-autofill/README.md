@@ -49,6 +49,10 @@ If the form's own validation blocks the submit (say, a username in an email-only
 
 - **`chrome`**: your everyday Chrome, via the extension in `extension/` and a native-messaging host.
   `target: { type: "chrome", tab_id }` (Claude in Chrome's tab ids), or `url_contains`, or the active tab.
+  Works with several Chrome profiles at once: each profile's extension gets its own bridge socket, and
+  the tool sends each request to the profile that has the tab. If a page is open in more than one
+  profile, it asks for `target.profile` (the id returned by earlier results; `agent-autofill doctor`
+  lists connected profiles).
 - **`cdp`**: headless or automated Chromium (Playwright, Puppeteer, `--remote-debugging-port`).
   `target: { type: "cdp", endpoint: "http://127.0.0.1:9222", url_contains | target_id }`.
   Only endpoints in `cdp.allowed_hosts` are used (loopback by default), so secrets never go to a remote browser.
