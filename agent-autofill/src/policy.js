@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import { POLICY_PATH } from './paths.js';
+import { withLock } from './lock.js';
 
 const DEFAULTS = { vaults: {}, default_vault: undefined, cdp: { allowed_hosts: ['127.0.0.1', 'localhost', '::1'] }, save: { overwrite_default: false }, grants: [] };
 
@@ -25,6 +26,17 @@ export function savePolicy(policy, file = POLICY_PATH) {
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, header + YAML.stringify(policy), { mode: 0o600 });
   fs.renameSync(tmp, file);
+}
+
+// Change the allow-list safely while other agent sessions may do the same:
+// lock, re-read the current file, apply the change, write it back.
+export async function updatePolicy(change, file = POLICY_PATH) {
+  return withLock('policy', () => {
+    const p = loadPolicy(file);
+    const result = change(p);
+    if (result !== false) savePolicy(p, file);
+    return p;
+  });
 }
 
 export function vaultName(policy, name) {

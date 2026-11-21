@@ -4,7 +4,8 @@ import { audit } from './audit.js';
 import { askUser } from './authorize.js';
 import { chromeFill, chromeRead, chromeTarget } from './channels/extension.js';
 import { cdpFill, cdpRead, cdpTarget } from './channels/cdp.js';
-import { addGrant, findGrant, grantsForItem, matchingGrants, isWildcard, loadPolicy, normalizeOrigin, originMatches, parsePattern, pruneExpired, savePolicy, vaultName } from './policy.js';
+import { addGrant, findGrant, grantsForItem, matchingGrants, isWildcard, loadPolicy, normalizeOrigin, originMatches, parsePattern, pruneExpired, updatePolicy, vaultName } from './policy.js';
+import { withLock } from './lock.js';
 import { openVault } from './vaults/index.js';
 import { generatePassword } from './password.js';
 
@@ -59,18 +60,22 @@ export async function requestAuthorization({ login, identity, vault, origins, al
   const pats = origins.map((o) => (isWildcard(o) ? o : normalizeOrigin(o)));
   pats.forEach(parsePattern);
 
-  const covered = (p) => { const g = findGrant(policy, { vault: vName, itemId: item.id, origin: p, kind }); return g && (!allow_visible_secrets || g.allow_visible_secrets); };
-  if (!allItems && pats.every((p) => !isWildcard(p) && covered(p))) {
-    return { approved: true, already: true, [kind === 'signup' ? 'identity' : 'login']: item.name, origins: pats };
-  }
+  const covered = (pol, p) => { const g = findGrant(pol, { vault: vName, itemId: item.id, origin: p, kind }); return g && (!allow_visible_secrets || g.allow_visible_secrets); };
+  const already = (pol) => !allItems && pats.every((p) => !isWildcard(p) && covered(pol, p));
+  const alreadyResult = () => ({ approved: true, already: true, [kind === 'signup' ? 'identity' : 'login']: item.name, origins: pats });
+  if (already(policy)) return alreadyResult();
   const itemSites = item?.uris ? item.uris.map((u) => { try { return normalizeOrigin(u); } catch { return u; } }) : [];
   const siteMismatch = Boolean(item?.uris) && pats.some((p) => !isWildcard(p) && !itemSites.includes(p));
 
+  // One dialog at a time across all agent sessions. While waiting, another session's
+  // request may have been approved already: re-check, so the user isn't asked twice.
+  return withLock('dialog', async () => {
+  if (already(loadPolicy())) return alreadyResult();
   const answer = await askUser({ purpose: kind, allowVisibleSecrets: allow_visible_secrets, itemName: item?.name, itemSites, vaultLabel: vaultLabel(vName, v), origins: pats, allItems, allowSubmit: allow_submit, reason, siteMismatch });
   audit({ action: 'authorize', kind, vault: vName, item: item?.name ?? '*', origins: pats, answer });
   if (answer === 'deny') return { approved: false, message: 'The user denied this request. Do not retry unless the user asks you to.' };
 
-  const fresh = loadPolicy(); // re-read: the file may have changed while the dialog was open
+  await updatePolicy((fresh) => {
   pruneExpired(fresh);
   addGrant(fresh, {
     ...(kind === 'signup' && { kind }),
@@ -84,8 +89,9 @@ export async function requestAuthorization({ login, identity, vault, origins, al
     approved_at: new Date().toISOString(),
     approved_via: 'dialog',
   });
-  savePolicy(fresh);
+  });
   return { approved: true, [kind === 'signup' ? 'identity' : 'login']: item?.name ?? '*', origins: pats, ...(answer === 'hour' && { expires_in: '1 hour' }) };
+  }, { timeoutMs: 15 * 60_000, staleMs: 5 * 60_000 });
 }
 
 export async function fillLogin({ login, vault, target, fields, custom, submit = false }) {
@@ -228,9 +234,9 @@ export async function fillSignup({ identity, vault, target, credentials = 'gener
       uris: [origin],
       notes: `Created by agent-autofill fill_signup on ${new Date().toISOString()} with identity "${idItem.name}". The signup itself was not confirmed by the tool.`,
     });
-    const fresh = loadPolicy();
-    addGrant(fresh, { vault: vName, item: saved.id, item_name: saved.name, origins: [origin], allow_submit: true, approved_at: new Date().toISOString(), approved_via: `signup approval for ${idItem.name}` });
-    savePolicy(fresh);
+    await updatePolicy((fresh) => {
+      addGrant(fresh, { vault: vName, item: saved.id, item_name: saved.name, origins: [origin], allow_submit: true, approved_at: new Date().toISOString(), approved_via: `signup approval for ${idItem.name}` });
+    });
   }
 
   const req = { mode: 'signup', expectedOrigin: origin, fields: kinds.map((k) => ({ kind: k, selector: explicit?.[k], value: vals[k] })), submit };

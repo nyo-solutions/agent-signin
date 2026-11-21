@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connectedProfiles } from './channels/extension.js';
-import { addGrant, isWildcard, loadPolicy, normalizeOrigin, parsePattern, pruneExpired, savePolicy, vaultName } from './policy.js';
+import { addGrant, isWildcard, loadPolicy, normalizeOrigin, parsePattern, pruneExpired, updatePolicy, vaultName } from './policy.js';
 import { HOME, NATIVE_HOST_NAME, POLICY_PATH, RUN_DIR } from './paths.js';
 import { openVault } from './vaults/index.js';
 
@@ -98,8 +98,9 @@ async function allow(f) {
   if (login !== '*' && !item) throw new Error(`${signup ? 'identity' : 'login'} "${login}" not found in vault ${vName} (${v.scope})`);
   const pats = origins.map((o) => (isWildcard(o) ? o : normalizeOrigin(o)));
   pats.forEach(parsePattern);
-  pruneExpired(policy);
-  addGrant(policy, {
+  await updatePolicy((fresh) => {
+  pruneExpired(fresh);
+  addGrant(fresh, {
     ...(signup && { kind: 'signup' }),
     ...(f['visible-secrets'] && { allow_visible_secrets: true }),
     vault: vName,
@@ -111,14 +112,15 @@ async function allow(f) {
     approved_at: new Date().toISOString(),
     approved_via: 'cli',
   });
-  savePolicy(policy);
+  });
   console.log(`approved ${signup ? 'signing up with ' : ''}${item ? item.name : `ALL ${signup ? 'identities' : 'logins'}`} for ${pats.join(', ')}${pats.includes('*') ? '  (WARNING: any site)' : ''}`);
 }
 
-function revoke(f) {
+async function revoke(f) {
   const [login, origin] = f._;
   if (!login) throw new Error('usage: agent-autofill revoke <login|id|*> [origin-pattern]');
-  const policy = loadPolicy();
+  let changed = false;
+  await updatePolicy((policy) => {
   const before = JSON.stringify(policy.grants);
   policy.grants = policy.grants
     .map((g) => {
@@ -127,9 +129,10 @@ function revoke(f) {
       return { ...g, origins: g.origins.filter((o) => o !== origin && o !== (isWildcard(origin) ? origin : normalizeOrigin(origin))) };
     })
     .filter((g) => g && g.origins.length);
-  if (JSON.stringify(policy.grants) === before) return console.log('nothing matched');
-  savePolicy(policy);
-  console.log('revoked');
+  changed = JSON.stringify(policy.grants) !== before;
+  return changed;
+  });
+  console.log(changed ? 'revoked' : 'nothing matched');
 }
 
 function list() {

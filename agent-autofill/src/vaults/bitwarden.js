@@ -7,6 +7,16 @@ import { promisify } from 'node:util';
 import { IDENTITY_FIELDS, fromBitwarden } from './identity-fields.js';
 import { describeScope, fieldAllowed, inScope, normalizeScope } from './bitwarden-scope.js';
 import { applyField, newItem } from './save-field.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { withLock } from '../lock.js';
+import { RUN_DIR } from '../paths.js';
+
+// All agent sessions share one `bw` data folder. Commands that change it (sync,
+// create, edit) run one at a time across sessions; reads run in parallel and
+// retry once if they happen to overlap a change. Sessions share the last sync time.
+const SYNC_STAMP = () => path.join(RUN_DIR, 'bw-sync.stamp');
+const bwLock = (fn) => withLock('bw', fn, { timeoutMs: 120_000, staleMs: 120_000 });
 
 const run = promisify(execFile);
 
@@ -36,10 +46,17 @@ export function create(cfg) {
     }
   }
 
+  const CHANGES = new Set(['sync', 'create', 'edit', 'delete', 'move', 'restore']);
   async function bwJson(args) {
     const env = { ...process.env, BW_SESSION: await getSession(), BW_NOINTERACTION: 'true' };
+    const call = () => run(bw, [...args, '--nointeraction'], { env, maxBuffer: 32 * 1024 * 1024 });
     try {
-      const { stdout } = await run(bw, [...args, '--nointeraction'], { env, maxBuffer: 32 * 1024 * 1024 });
+      let stdout;
+      if (CHANGES.has(args[0])) ({ stdout } = await bwLock(call));
+      else {
+        try { ({ stdout } = await call()); if (args[0] === 'list') JSON.parse(stdout); }
+        catch { await new Promise((res) => setTimeout(res, 300)); ({ stdout } = await call()); }
+      }
       return stdout;
     } catch (e) {
       session = undefined; // maybe expired; re-read next time
@@ -61,7 +78,14 @@ export function create(cfg) {
 
   async function sync() {
     if (Date.now() - synced < 60_000) return;
-    await bwJson(['sync']).catch(() => {}); // offline is fine: use the local cache
+    const stamp = () => { try { return fs.statSync(SYNC_STAMP()).mtimeMs; } catch { return 0; } };
+    if (Date.now() - stamp() >= 60_000) {
+      await bwLock(async () => {
+        if (Date.now() - stamp() < 60_000) return; // another session synced while we waited
+        await bwJson(['sync']).catch(() => {}); // offline is fine: use the local cache
+        try { fs.mkdirSync(RUN_DIR, { recursive: true, mode: 0o700 }); fs.writeFileSync(SYNC_STAMP(), String(Date.now()), { mode: 0o600 }); } catch {}
+      });
+    }
     synced = Date.now();
   }
 
@@ -109,6 +133,9 @@ export function create(cfg) {
   const bwCreate = (obj) => bwWrite(['create', 'item'], obj);
   const bwEdit = (id, obj) => bwWrite(['edit', 'item', id], obj);
   function bwWrite(cmd, obj) {
+    return bwLock(() => bwWriteUnlocked(cmd, obj));
+  }
+  function bwWriteUnlocked(cmd, obj) {
     return new Promise(async (resolve, reject) => {
       let env;
       try { env = { ...process.env, BW_SESSION: await getSession(), BW_NOINTERACTION: 'true' }; } catch (e) { return reject(e); }
@@ -170,7 +197,10 @@ export function create(cfg) {
       return created;
     },
     // save_from_page: create an item or merge one value into an existing one (inside the scope only).
-    async saveField({ create, item_type = 'login', item, item_name, uris, field_kind, field_name, field_type, value, overwrite }) {
+    // The whole read-change-write holds the bw lock, so two sessions saving into the same
+    // item at once can't drop each other's changes.
+    async saveField(args) { return bwLock(() => this._saveFieldLocked(args)); },
+    async _saveFieldLocked({ create, item_type = 'login', item, item_name, uris, field_kind, field_name, field_type, value, overwrite }) {
       if (field_kind === 'custom' && !fieldAllowed(scope, field_name)) throw new Error(`bitwarden: field "${field_name}" is excluded by exclude_fields`);
       if (!scope.types.includes(item_type)) throw new Error(`bitwarden: item_types for this vault do not include ${item_type}`);
       const pool = await (item_type === 'identity' ? rawIdentities() : rawItems());

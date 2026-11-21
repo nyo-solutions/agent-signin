@@ -96,6 +96,21 @@ If the form's own validation blocks the submit (say, a username in an email-only
 
 The Claude desktop app's built-in browser pane can't be reached from outside, so use Chrome or headless for sign-ins.
 
+## Several agent sessions at once
+
+Every agent session runs its own MCP server; they all share the allow-list, the vault CLI's data and the
+Chrome bridge, and can work at the same time:
+
+- changes to the allow-list (approvals, revokes, signup logins) are locked read-change-writes, so one
+  session never overwrites another's approvals;
+- vault commands that change data (sync, create, edit) run one at a time across sessions, a save holds
+  that lock for its whole read-change-write, and sessions share one sync per minute; reads run in parallel;
+- approval dialogs are queued, one on screen at a time, and a request already covered by another
+  session's answer doesn't ask again;
+- each Chrome profile has its own bridge socket that any number of sessions can use at once.
+
+Locks are files in `~/.config/agent-autofill/run/`; a lock left by a crashed session is taken over.
+
 ## Allow-list: `~/.config/agent-autofill/policy.yaml`
 
 ```yaml
