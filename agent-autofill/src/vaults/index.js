@@ -7,6 +7,8 @@
 //   findIdentity(ref)    -> one of listIdentities() by id or exact name
 //   identity(id)         -> { first_name, last_name, full_name, email, username, phone, company,
 //                             address1, address2, city, state, postal_code, country }
+//   listCards() / findCard(ref) -> [{ id, name, brand, has: [field] }]   (optional; only with item_types card)
+//   card(id)             -> { cardholder_name, number, exp_month (MM), exp_year (YYYY), code, brand }
 //   createLogin({ name, username, password, uris, notes }) -> { id, name }   (optional)
 // Only items an adapter lists are fillable, so scope adapters narrowly (e.g. one folder).
 // To add a vendor: write a module exporting create(config) and register it below.

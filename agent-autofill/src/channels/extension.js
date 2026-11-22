@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { RUN_DIR } from '../paths.js';
+import { fillAcrossFrames, hasFrames } from './frames.js';
 
 const NOT_CONNECTED = 'Chrome extension is not connected: open Chrome with the Agent Autofill extension enabled (run `agent-autofill doctor`)';
 
@@ -91,8 +92,13 @@ export async function chromeRead(tab, req) {
 }
 
 export async function chromeFill(tab, req) {
-  return request(tab.socket, {
-    op: 'fill', tab_id: tab.tab_id, expected_origin: req.expectedOrigin, fields: req.fields, submit: req.submit,
-    mode: req.mode, allow_visible_secrets: req.allowVisibleSecrets,
+  const one = (r, frame) => request(tab.socket, {
+    op: 'fill', tab_id: tab.tab_id, expected_origin: req.expectedOrigin, fields: r.fields, submit: r.submit,
+    mode: r.mode, allow_visible_secrets: r.allowVisibleSecrets, partial: r.partial, submit_only: r.submitOnly,
+    ...(frame && { frame_id: frame.ref, frame_origin: frame.origin }),
   });
+  if (!hasFrames(req)) return one(req);
+  const frames = (await request(tab.socket, { op: 'frames', tab_id: tab.tab_id, expected_origin: req.expectedOrigin }))
+    .map((f) => ({ ref: f.frame_id, origin: f.origin, top: f.frame_id === 0 }));
+  return fillAcrossFrames(frames, (frame, r) => one(r, frame), req);
 }

@@ -15,7 +15,7 @@ only learns which fields were filled.
 
 | Folder | What it is |
 |---|---|
-| [`agent-autofill/`](agent-autofill) | MCP server + Chrome extension. Tools: `list_logins`, `request_authorization` (a dialog on *your* screen writes the allow-list), `fill_login` (username, password, TOTP, custom fields such as API keys), `fill_signup` (registration forms from a vault identity, with a generated password saved to the vault first), `save_from_page` (an API key or secret shown on a page goes straight into the vault). Works with your everyday Chrome or a headless Chromium (Playwright/Puppeteer via CDP). |
+| [`agent-autofill/`](agent-autofill) | MCP server + Chrome extension. Tools: `list_logins`, `request_authorization` (a dialog on *your* screen writes the allow-list), `fill_login` (username, password, TOTP, custom fields such as API keys), `fill_signup` (registration forms from a vault identity, with a generated password saved to the vault first), `fill_details` (checkout, shipping and contact forms from an identity and/or a payment card, including approved payment iframes), `save_from_page` (an API key or secret shown on a page goes straight into the vault). Works with your everyday Chrome or a headless Chromium (Playwright/Puppeteer via CDP). |
 | [`agent-vault/`](agent-vault) | Self-hosted [Vaultwarden](https://github.com/dani-garcia/vaultwarden) on AWS Lambda + EFS (CDK), about $0–1/month, with backups, restore and Touch ID unlock on macOS. Optional: agent-autofill works with any Bitwarden-compatible vault, or environment variables in CI. |
 
 ## Highlights
@@ -25,7 +25,8 @@ only learns which fields were filled.
 - The page's origin is checked by the browser, not taken from the agent, so a prompt-injected agent
   can't fill your login into a look-alike site.
 - Approvals are yours: exact sites or wildcards (`https://*.example.com`, `http://localhost:*`, `*`),
-  per login or identity, permanent or for one hour.
+  per login, identity or card, permanent or for one hour. Cards are opt-in, need exact sites, and don't
+  submit (pay) unless you allow it.
 - Passwords only go into password fields; fills run in an isolated JavaScript world; every action is
   logged without values.
 - Pluggable vault adapters (Bitwarden/Vaultwarden, env); one file per new vendor.

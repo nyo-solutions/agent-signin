@@ -3,12 +3,15 @@
 //   <PREFIX><NAME>_URL (optional, shown as the login's site). Default prefix AGENT_AUTOFILL_.
 //   Custom fields: <PREFIX><NAME>_FIELD_<FIELD> (text), _SECRET_<FIELD> (hidden), _FLAG_<FIELD> (boolean, "true"); names lower-cased.
 //   Identities: <PREFIX>IDENTITY_<NAME>='{"first_name":"…","email":"…",…}' (JSON, keys as in identity-fields.js).
+//   Cards: <PREFIX>CARD_<NAME>='{"cardholder_name":"…","number":"…","exp_month":"12","exp_year":"2030","code":"…","brand":"Visa"}'
+//   (only with item_types including card in the vault config).
 //   Logins created by fill_signup / save_from_page live in memory for the life of the MCP server
 //   (ephemeral CI accounts); env-defined logins are read-only.
 import crypto from 'node:crypto';
 import { totp } from '../totp.js';
 import { IDENTITY_FIELDS } from './identity-fields.js';
 import { applyField, newItem } from './save-field.js';
+import { CARD_FIELDS, normalizeCard } from './card-fields.js';
 
 const TYPE_NAME = { 0: 'text', 1: 'hidden', 2: 'boolean' };
 
@@ -18,7 +21,7 @@ export function create(cfg) {
     const set = new Set();
     for (const k of Object.keys(process.env)) {
       const rest = k.slice(prefix.length);
-      const m = k.startsWith(prefix) && !/_(FIELD|SECRET|FLAG)_/.test(rest) && /^(.+)_(USERNAME|PASSWORD|TOTP_SECRET)$/.exec(rest);
+      const m = k.startsWith(prefix) && !rest.startsWith('CARD_') && !/_(FIELD|SECRET|FLAG)_/.test(rest) && /^(.+)_(USERNAME|PASSWORD|TOTP_SECRET)$/.exec(rest);
       if (m) set.add(m[1]);
     }
     return [...set];
@@ -36,6 +39,15 @@ export function create(cfg) {
     let vals = {};
     try { vals = JSON.parse(process.env[k]); } catch { throw new Error(`env: ${k} is not valid JSON`); }
     return { id: name, name, vals: Object.fromEntries(IDENTITY_FIELDS.filter((f) => vals[f]).map((f) => [f, String(vals[f])])) };
+  });
+  const cardTypes = (cfg.item_types || ['login', 'identity']).map(String);
+  for (const t of cardTypes) if (!['login', 'identity', 'card'].includes(t)) throw new Error(`env vault: unknown item_types "${t}" (supported: login, identity, card)`);
+  const cardPrefix = `${prefix}CARD_`;
+  const cards = () => (cardTypes.includes('card') ? Object.keys(process.env).filter((k) => k.startsWith(cardPrefix)) : []).map((k) => {
+    const name = k.slice(cardPrefix.length).toLowerCase();
+    let vals;
+    try { vals = JSON.parse(process.env[k]); } catch { throw new Error(`env: ${k} is not valid JSON`); }
+    return { id: `card-${name}`, name, vals: normalizeCard(vals) };
   });
   return {
     type: 'env',
@@ -66,6 +78,18 @@ export function create(cfg) {
       const i = identities().find((x) => x.id === id);
       if (!i) throw new Error('env: identity not found');
       return i.vals;
+    },
+    async listCards() {
+      return cards().map((c) => ({ id: c.id, name: c.name, brand: c.vals.brand, has: CARD_FIELDS.filter((f) => c.vals[f]) }));
+    },
+    async findCard(ref) {
+      const all = await this.listCards();
+      return all.find((c) => c.id === ref) || all.find((c) => c.name === ref.toLowerCase());
+    },
+    async card(id) {
+      const c = cards().find((x) => x.id === id);
+      if (!c) throw new Error('env: card not found');
+      return { ...c.vals };
     },
     async createLogin({ name, username, password, uris }) {
       const id = `generated-${crypto.randomUUID()}`;

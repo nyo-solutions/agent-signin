@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connectedProfiles } from './channels/extension.js';
-import { addGrant, isWildcard, loadPolicy, normalizeOrigin, parsePattern, pruneExpired, updatePolicy, vaultName } from './policy.js';
+import { addGrant, cardGrantProblem, isWildcard, loadPolicy, normalizeOrigin, parsePattern, pruneExpired, updatePolicy, vaultName } from './policy.js';
 import { HOME, NATIVE_HOST_NAME, POLICY_PATH, RUN_DIR } from './paths.js';
 import { openVault } from './vaults/index.js';
 
@@ -89,31 +89,38 @@ async function doctor() {
 
 async function allow(f) {
   const [login, ...origins] = f._;
-  if (!login || !origins.length) throw new Error('usage: agent-autofill allow <login|*> <origin...> [--signup] [--visible-secrets] [--vault name] [--no-submit] [--hours n]   (--signup: login is an identity; --visible-secrets: hidden custom fields may go into visible text inputs)');
-  const signup = Boolean(f.signup);
+  if (!login || !origins.length) throw new Error('usage: agent-autofill allow <login|*> <origin...> [--signup | --details | --card] [--frame origin,...] [--submit | --no-submit] [--visible-secrets] [--vault name] [--hours n]   (--signup / --details: the item is an identity, for fill_signup / fill_details; --card: a payment card, exact sites only, no submit unless --submit; --frame: iframes on the site that hold the fields; --visible-secrets: hidden custom fields may go into visible text inputs)');
+  const kind = f.card ? 'card' : f.details ? 'identity' : f.signup ? 'signup' : 'login';
+  const word = { login: 'login', signup: 'identity', identity: 'identity', card: 'card' }[kind];
   const policy = loadPolicy();
   const vName = vaultName(policy, f.vault);
   const v = openVault(vName, policy.vaults[vName]);
-  const item = login === '*' ? null : signup ? await v.findIdentity?.(login) : await v.find(login);
-  if (login !== '*' && !item) throw new Error(`${signup ? 'identity' : 'login'} "${login}" not found in vault ${vName} (${v.scope})`);
+  const item = login === '*' ? null : word === 'identity' ? await v.findIdentity?.(login) : kind === 'card' ? await v.findCard?.(login) : await v.find(login);
+  if (login !== '*' && !item) throw new Error(`${word} "${login}" not found in vault ${vName} (${v.scope})`);
   const pats = origins.map((o) => (isWildcard(o) ? o : normalizeOrigin(o)));
   pats.forEach(parsePattern);
+  const frames = f.frame ? String(f.frame).split(',').map((o) => { if (isWildcard(o)) throw new Error('--frame takes exact origins'); return normalizeOrigin(o); }) : [];
+  if (frames.length && !['identity', 'card'].includes(kind)) throw new Error('--frame only applies with --details or --card');
+  if (kind === 'card') { const problem = cardGrantProblem({ item: item ? item.id : '*', origins: pats }); if (problem) throw new Error(problem); }
+  const allowSubmit = kind === 'card' ? Boolean(f.submit) : !f['no-submit'];
   await updatePolicy((fresh) => {
   pruneExpired(fresh);
   addGrant(fresh, {
-    ...(signup && { kind: 'signup' }),
+    ...(kind !== 'login' && { kind }),
+    ...(frames.length && { frame_origins: frames }),
     ...(f['visible-secrets'] && { allow_visible_secrets: true }),
     vault: vName,
     item: item ? item.id : '*',
     item_name: item ? item.name : `ALL (${v.scope})`,
     origins: pats,
-    allow_submit: !f['no-submit'],
+    allow_submit: allowSubmit,
     ...(f.hours && { expires_at: new Date(Date.now() + Number(f.hours) * 3600_000).toISOString() }),
     approved_at: new Date().toISOString(),
     approved_via: 'cli',
   });
   });
-  console.log(`approved ${signup ? 'signing up with ' : ''}${item ? item.name : `ALL ${signup ? 'identities' : 'logins'}`} for ${pats.join(', ')}${pats.includes('*') ? '  (WARNING: any site)' : ''}`);
+  const what = { login: '', signup: 'signing up with ', identity: 'filling details of ', card: 'filling card ' }[kind];
+  console.log(`approved ${what}${item ? item.name : `ALL ${word === 'identity' ? 'identities' : 'logins'}`} for ${pats.join(', ')}${frames.length ? ` (frames: ${frames.join(', ')})` : ''}${allowSubmit ? '' : ' [no submit]'}${pats.includes('*') ? '  (WARNING: any site)' : ''}`);
 }
 
 async function revoke(f) {
@@ -139,7 +146,7 @@ function list() {
   const policy = loadPolicy();
   if (!policy.grants.length) return console.log(`no approvals yet (${POLICY_PATH})`);
   for (const g of policy.grants) {
-    console.log(`${g.kind === 'signup' ? 'signup' : 'login '}  ${g.vault}  ${g.item_name || g.item}  ->  ${g.origins.join(', ')}${g.allow_submit ? '' : '  [no submit]'}${g.allow_visible_secrets ? '  [visible secrets]' : ''}${g.expires_at ? `  [until ${g.expires_at}]` : ''}`);
+    console.log(`${(g.kind || 'login').padEnd(8)}  ${g.vault}  ${g.item_name || g.item}  ->  ${g.origins.join(', ')}${g.frame_origins ? `  [frames ${g.frame_origins.join(', ')}]` : ''}${g.allow_submit ? '' : '  [no submit]'}${g.allow_visible_secrets ? '  [visible secrets]' : ''}${g.expires_at ? `  [until ${g.expires_at}]` : ''}`);
   }
 }
 

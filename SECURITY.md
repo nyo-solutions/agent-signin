@@ -22,10 +22,14 @@ repository (Security tab), not in public issues. We aim to answer within a few w
   permissions they need.
 - A compromised site: whatever you approve for a site, that site receives.
 - `"*"` approvals: these switch off the origin check for that login or identity.
+- Card details once filled: the card number, expiry and security code sit in the page's inputs, where
+  the agent's screenshots or page reading can see them. The tool never returns them, but it can't hide
+  what a page shows. Cards are opt-in (`item_types`), and card approvals need exact sites and don't
+  allow submitting by default. Prefer test cards or limited virtual cards for agent use.
 - The vault scope (`folders`, `collections`, `exclude_*`) limits what *this tool* reads. The unlocked
   vault session itself can read the whole account, so an agent with shell access could bypass the tool.
   For hard isolation, give agents their **own vault account** that only receives the items you share
-  with it (for example an organization collection), and keep cards and personal items in your own account.
+  with it (for example an organization collection), and keep personal items, and any cards you don't want agents to use, in your own account.
 
 ## Deployments (agent-vault)
 

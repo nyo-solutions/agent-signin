@@ -5,6 +5,7 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { IDENTITY_FIELDS, fromBitwarden } from './identity-fields.js';
+import { CARD_FIELDS, fromBitwarden as cardFromBitwarden } from './card-fields.js';
 import { describeScope, fieldAllowed, inScope, normalizeScope } from './bitwarden-scope.js';
 import { applyField, newItem } from './save-field.js';
 import fs from 'node:fs';
@@ -127,6 +128,7 @@ export function create(cfg) {
   }
   const rawItems = async () => (await allItems()).filter((i) => i.type === 1);
   const rawIdentities = async () => (await allItems()).filter((i) => i.type === 4);
+  const rawCards = async () => (scope.types.includes('card') ? (await allItems()).filter((i) => i.type === 3) : []);
 
   // `bw create item` / `bw edit item <id>` read base64 JSON from stdin, so
   // secrets never appear in a process argument list.
@@ -187,6 +189,24 @@ export function create(cfg) {
       const vals = fromBitwarden(item.identity);
       for (const f of Object.keys(vals)) if (!fieldAllowed(scope, f)) delete vals[f];
       return vals;
+    },
+    // Cards: only with item_types including card. Listing shows the brand and which fields exist.
+    async listCards() {
+      return (await rawCards()).map((i) => {
+        const c = cardFromBitwarden(i.card);
+        return { id: i.id, name: i.name, brand: c.brand, has: CARD_FIELDS.filter((f) => c[f] && fieldAllowed(scope, f)) };
+      });
+    },
+    async findCard(ref) {
+      const all = await this.listCards();
+      return all.find((i) => i.id === ref) || all.find((i) => i.name === ref);
+    },
+    async card(id) {
+      const item = (await rawCards()).find((i) => i.id === id);
+      if (!item) throw new Error('bitwarden: card not found in the configured scope');
+      const c = cardFromBitwarden(item.card);
+      for (const f of CARD_FIELDS) if (!fieldAllowed(scope, f)) delete c[f];
+      return c;
     },
     async createLogin({ name, username, password, uris, notes }) {
       const created = await bwCreate({

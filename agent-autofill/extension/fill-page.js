@@ -8,11 +8,18 @@
 // mode "login"  (default): every requested field must be found, or nothing is filled.
 // mode "signup": requested fields given a selector must be found; auto-detected
 //                ones that the form doesn't have are skipped and reported.
+// mode "details": like signup, for identity details and payment card fields (fill_details).
+//                partial: true (used per frame when a form spans iframes) also skips
+//                selector fields that are not in this frame; submitOnly: only submit.
+//
+// Card kinds: card_name, card_number, card_exp ({ month, year }, written as the input
+// expects: MM/YY, MM/YYYY or MMYY), card_exp_month, card_exp_year, card_code.
 //
 // Custom vault fields: { kind: "custom", name, ctype: "text"|"hidden"|"boolean" }. Hidden ones
 // (API keys, secrets) only go into masked inputs unless allowVisibleSecrets is set by the policy.
 export async function fillPage(req) {
-  const { expectedOrigin, fields, submit, mode = 'login', allowVisibleSecrets = false } = req;
+  const { expectedOrigin, fields = [], submit, mode = 'login', allowVisibleSecrets = false, partial = false, submitOnly = false } = req;
+  const lenient = mode === 'signup' || mode === 'details';
   if (location.origin !== expectedOrigin) {
     return { ok: false, error: `page origin is ${location.origin}, expected ${expectedOrigin}` };
   }
@@ -63,13 +70,27 @@ export async function fillPage(req) {
     state: [['address-level1'], /state|province|region|county/],
     postal_code: [['postal-code'], /zip|postal|post.?code/],
     country: [['country', 'country-name'], /country/],
+    card_name: [['cc-name'], /name.?on.?card|card.?holder|holder.?name|cc.?name|name.?on.?the.?card/],
+    card_number: [['cc-number'], /card.?number|card.?no\b|cc.?num|credit.?card|debit.?card|\bpan\b|^card$/],
+    card_exp_month: [['cc-exp-month'], /exp\w*.?month|month|\bmm\b|cc.?month/],
+    card_exp_year: [['cc-exp-year'], /exp\w*.?year|year|\byy(yy)?\b|cc.?year/],
+    card_exp: [['cc-exp'], /expir|\bexp\b|valid.?(thru|through|until)|mm\W*yy/],
+    card_code: [['cc-csc'], /cvc|cvv|csc|cvn|security.?code|card.?code|verification/],
   };
+  const CARD = ['card_name', 'card_number', 'card_exp_month', 'card_exp_year', 'card_exp', 'card_code'];
+  const combinedExp = (el) => /mm\W*yy/.test(describe(el)) || ac(el).includes('cc-exp');
   const TYPES = {
     username: ['text', 'email', 'tel'],
     password: ['password'],
     password_confirm: ['password'],
     totp: ['text', 'tel', 'number', 'password'],
     email: ['email', 'text'],
+    card_name: ['text'],
+    card_number: ['text', 'tel', 'number', 'password'],
+    card_exp: ['text', 'tel'],
+    card_exp_month: ['text', 'tel', 'number'],
+    card_exp_year: ['text', 'tel', 'number'],
+    card_code: ['text', 'tel', 'number', 'password'],
   };
   const label = (f) => (f.kind === 'custom' ? `custom:${f.name}` : f.kind);
   const allowed = (f, el) => {
@@ -82,7 +103,7 @@ export async function fillPage(req) {
       if (el.type === 'password') return true;
       return visibleOk && ['text', 'search', 'url', 'email', 'tel', 'number'].includes(el.type);
     }
-    if (el instanceof HTMLSelectElement) return ['country', 'state'].includes(kind);
+    if (el instanceof HTMLSelectElement) return ['country', 'state', 'card_exp_month', 'card_exp_year'].includes(kind);
     if (!(el instanceof HTMLInputElement)) return false;
     return (TYPES[kind] || ['text', 'tel', 'search']).includes(el.type);
   };
@@ -121,7 +142,10 @@ export async function fillPage(req) {
     }
     if (kind === 'password_confirm') return passwords().find((el) => !taken.has(el));
     const [tokens, rx] = HINTS[kind] || [[], null];
-    const ok = free.filter((el) => allowed(kind, el));
+    let ok = free.filter((el) => allowed(kind, el));
+    // A single "MM / YY" box is card_exp, never the month or year field.
+    if (kind === 'card_exp_month' || kind === 'card_exp_year') ok = ok.filter((el) => !combinedExp(el));
+    if (kind === 'card_exp') ok = ok.filter((el) => !(el instanceof HTMLSelectElement));
     return ok.find((el) => ac(el).some((t) => tokens.includes(t))) ||
       (kind === 'email' && ok.find((el) => el.type === 'email')) ||
       (kind === 'phone' && ok.find((el) => el.type === 'tel')) ||
@@ -139,10 +163,10 @@ export async function fillPage(req) {
       const auto = !f.selector || f.selector === 'auto';
       const name = label(f);
       const el = auto
-        ? (f.kind === 'custom' ? customDetect(f, taken) : mode === 'signup' ? signupDetect(f.kind, taken) : loginDetect[f.kind]())
+        ? (f.kind === 'custom' ? customDetect(f, taken) : lenient ? signupDetect(f.kind, taken) : loginDetect[f.kind]())
         : bySelector(f.selector);
       if (!el) {
-        if (mode === 'signup' && auto) { skipped.push(name); continue; }
+        if ((lenient && auto) || partial) { skipped.push(name); continue; }
         return { ok: false, error: `no ${name} field found${auto ? ' (auto-detect)' : ` for ${f.selector}`}` };
       }
       if (!allowed(f, el)) {
@@ -158,7 +182,38 @@ export async function fillPage(req) {
   } catch (e) {
     return { ok: false, error: e.message };
   }
-  if (!plan.length) return { ok: false, error: 'none of the requested fields were found on the page' };
+  if (!plan.length && !submitOnly) {
+    if (partial) return { ok: true, origin: location.origin, filled: [], submitted: false, skipped };
+    return { ok: false, error: 'none of the requested fields were found on the page' };
+  }
+
+  // Card values in the shape each input expects (2- or 4-digit year, MM/YY vs MMYY, select options).
+  const two = (y) => String(y).slice(-2);
+  const fmt = (p) => {
+    const el = p.el;
+    const ml = el.maxLength > 0 ? el.maxLength : 0;
+    const hint = `${describe(el)} ${el.getAttribute('placeholder') || ''}`.toLowerCase();
+    if (p.kind === 'card_number') return String(p.value).replace(/\D/g, '');
+    if (p.kind === 'card_exp') {
+      const { month, year } = p.value;
+      if (/yyyy/.test(hint)) return `${month}/${year}`;
+      if (/mm \/ yy/.test(hint)) return `${month} / ${two(year)}`;
+      if (ml === 4) return `${month}${two(year)}`;
+      if (/yy/.test(hint) || ml === 5) return `${month}/${two(year)}`;
+      return ml >= 7 ? `${month}/${year}` : `${month}/${two(year)}`;
+    }
+    if (p.kind === 'card_exp_year' && !(el instanceof HTMLSelectElement)) return ml === 2 || (/\byy\b/.test(hint) && !/yyyy/.test(hint)) ? two(p.value) : String(p.value);
+    return p.value;
+  };
+  const cardOption = (p) => {
+    const opts = Array.from(p.el.options);
+    if (p.kind === 'card_exp_month') {
+      const n = Number(p.value);
+      return opts.find((o) => o.value !== '' && Number(o.value) === n) || opts.find((o) => Number((o.textContent.match(/\d+/) || [])[0]) === n);
+    }
+    const y4 = String(p.value);
+    return opts.find((o) => o.value === y4 || o.value === two(y4)) || opts.find((o) => o.textContent.trim() === y4 || o.textContent.trim() === two(y4));
+  };
 
   const inputSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
   const selectSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
@@ -166,7 +221,12 @@ export async function fillPage(req) {
   const filled = [];
   for (const p of plan) {
     p.el.focus();
-    if (p.el instanceof HTMLSelectElement) {
+    if (CARD.includes(p.kind)) p.value = fmt(p);
+    if (p.el instanceof HTMLSelectElement && CARD.includes(p.kind)) {
+      const opt = cardOption(p);
+      if (!opt) { skipped.push(p.kind); p.el.blur(); continue; }
+      selectSetter.call(p.el, opt.value);
+    } else if (p.el instanceof HTMLSelectElement) {
       const want = String(p.value).trim().toLowerCase();
       const opt = Array.from(p.el.options).find((o) => o.value.toLowerCase() === want || o.textContent.trim().toLowerCase() === want) ||
         Array.from(p.el.options).find((o) => want.length > 2 && o.textContent.trim().toLowerCase().startsWith(want));
@@ -197,7 +257,8 @@ export async function fillPage(req) {
       const btn = bySelector(submit);
       if (btn) { btn.click(); submitted = true; } else submitNote = `submit selector not found: ${submit}`;
     } else {
-      const form = plan.map((p) => p.el.form).find(Boolean);
+      const form = plan.map((p) => p.el.form).find(Boolean) ||
+        (submitOnly ? Array.from(document.forms).find((fm) => fm.querySelector('button, input[type=submit]')) : undefined);
       if (form && !form.checkValidity()) {
         const bad = Array.from(form.elements).filter((el) => el.willValidate && !el.validity.valid)
           .map((el) => plan.find((p) => p.el === el)?.kind || el.name || el.id || el.type);
@@ -214,6 +275,7 @@ export async function fillPage(req) {
   return {
     ok: true, origin: location.origin, filled, submitted,
     ...(skipped.length && { skipped }),
+    ...(submitOnly && !submitted && !submitNote && { note: 'nothing to submit' }),
     ...(submitNote && { note: submitNote }),
   };
 }

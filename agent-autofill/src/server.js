@@ -2,7 +2,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { fillLogin, fillSignup, listLogins, requestAuthorization, saveFromPage } from './core.js';
+import { DETAIL_KINDS, fillDetails, fillLogin, fillSignup, listLogins, requestAuthorization, saveFromPage } from './core.js';
 
 const server = new McpServer({ name: 'agent-autofill', version: '0.1.0' });
 
@@ -13,20 +13,24 @@ const wrap = (fn) => async (args) => { try { return ok(await fn(args)); } catch 
 server.registerTool('list_logins', {
   title: 'List vault logins',
   description:
-    "List the vault logins (for fill_login) and identities (for fill_signup), with the sites the user has approved each one for. Returns names, sites and which fields exist only, never usernames, passwords, codes or personal details.",
+    "List the vault logins (for fill_login), identities (for fill_signup and fill_details) and payment cards (for fill_details, when the user enabled cards), with the sites the user has approved each one for. Returns names, sites, card brands and which fields exist only, never usernames, passwords, codes, card numbers or personal details.",
   inputSchema: {},
 }, wrap(() => listLogins()));
 
 server.registerTool('request_authorization', {
   title: 'Ask the user to approve a login for a site',
   description:
-    "Ask the user to approve using a vault login (to sign in) or an identity (to sign up / create an account) on one or more sites. A dialog appears on the user's screen; their answer is saved to their allow-list. Only the user can approve: you cannot answer the dialog, and the result tells you what they chose. " +
-    'Pass exactly one of login or identity. Origins are exact (https://app.example.com) or wildcards: "https://*.example.com", "http://localhost:*", "https://*", or "*" for any site. "*" as login or identity asks for all of them in the vault scope. Request the narrowest scope that does the job. If denied, do not ask again unless the user tells you to.',
+    "Ask the user to approve using a vault login (to sign in), an identity (to sign up, or to fill contact / address details) or a payment card (to fill a checkout form) on one or more sites. A dialog appears on the user's screen; their answer is saved to their allow-list. Only the user can approve: you cannot answer the dialog, and the result tells you what they chose. " +
+    'Pass exactly one of login, identity or card. Origins are exact (https://app.example.com) or wildcards: "https://*.example.com", "http://localhost:*", "https://*", or "*" for any site. "*" as login or identity asks for all of them in the vault scope. ' +
+    'Cards: one named card and exact sites only (no wildcards), allow_submit defaults to false; if the card form sits in a payment provider\'s iframe (e.g. https://js.stripe.com), list that frame\'s origin in frame_origins. Request the narrowest scope that does the job. If denied, do not ask again unless the user tells you to.',
   inputSchema: {
     login: z.string().optional().describe('Login name or id from list_logins, or "*" for all (to sign in)'),
-    identity: z.string().optional().describe('Identity name or id from list_logins, or "*" for all (to sign up)'),
+    identity: z.string().optional().describe('Identity name or id from list_logins, or "*" for all (to sign up, or fill details)'),
+    identity_use: z.enum(['signup', 'details']).optional().describe('With identity: "signup" (fill_signup, default) or "details" (fill_details: contact / shipping / billing forms)'),
+    card: z.string().optional().describe('Payment card name or id from list_logins (to fill a checkout form)'),
+    frame_origins: z.array(z.string()).optional().describe('Exact origins of iframes on the site that hold the form fields, e.g. a payment provider\'s card frame (identity details and cards only)'),
     origins: z.array(z.string()).min(1).describe('Sites to approve (origin, URL or wildcard pattern)'),
-    allow_submit: z.boolean().optional().describe('Allow fill_login / fill_signup to submit the form (default true)'),
+    allow_submit: z.boolean().optional().describe('Allow the fill tool to submit the form (default true; false for cards, where submitting can pay)'),
     allow_visible_secrets: z.boolean().optional().describe('Ask to let hidden custom fields (API keys, secrets) go into visible text inputs, for sites whose key boxes are plain text (default false)'),
     reason: z.string().optional().describe('Short reason shown to the user'),
     vault: z.string().optional().describe('Vault name if more than one is configured'),
@@ -78,6 +82,24 @@ server.registerTool('fill_signup', {
     vault: z.string().optional(),
   },
 }, wrap((a) => fillSignup(a)));
+
+server.registerTool('fill_details', {
+  title: 'Fill contact, address or payment card details from the vault',
+  description:
+    "Fill a form (checkout, shipping, billing, contact, profile) with an identity's details and/or a payment card the user approved for this site. The tool types the values into the page itself; you only get back which fields were filled, and never the card number, code or personal details. " +
+    'Pass identity, card, or both. Without fields, everything available is auto-detected (card fields first) and fields the form lacks are listed as skipped; the identity\'s username is only filled when you name it. ' +
+    'Card fields: card_name, card_number, card_exp (one "MM/YY" box), card_exp_month, card_exp_year, card_code. Identity fields: ' + DETAIL_KINDS.filter((k) => !k.startsWith('card_')).join(', ') + '. ' +
+    'Card fields inside a payment provider\'s iframe are filled only if the user approved that frame origin (request_authorization frame_origins); filled_in_frames shows which. ' +
+    "Never ticks terms or consent boxes. submit needs an approval that allows it; for cards it is off by default because submitting can complete a payment, so normally leave the final pay click to the user. Same target options as fill_login. Refuses unless the page's real origin is approved (request_authorization with identity + identity_use \"details\", or card).",
+  inputSchema: {
+    identity: z.string().optional().describe('Identity name or id from list_logins'),
+    card: z.string().optional().describe('Card name or id from list_logins'),
+    target: TARGET,
+    fields: z.object(Object.fromEntries(DETAIL_KINDS.map((f) => [f, selector.optional()]))).optional(),
+    submit: z.union([z.boolean(), z.string()]).optional().describe('true = submit the form, or a selector of the button to click (only if the approval allows it)'),
+    vault: z.string().optional(),
+  },
+}, wrap((a) => fillDetails(a)));
 
 server.registerTool('save_from_page', {
   title: 'Save a value shown on a page into the vault',

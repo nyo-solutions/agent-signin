@@ -37,8 +37,24 @@ const SIGNUP = page(`<form method=post action=/submit>
   <input type=password name=password_confirm placeholder="Confirm password">
   <label><input type=checkbox name=terms> I agree</label>
   <button>Create account</button></form>`);
+const CARD = { cardholder_name: 'Cardy McCardface', brand: 'Visa', number: '4242 4242 4242 4242', exp_month: '7', exp_year: '2031', code: '913' };
+const CHECKOUT = page(`<form method=post action=/submit>
+  <input name=fname autocomplete=given-name><input name=lname autocomplete=family-name><input type=email name=email>
+  <label for=cn>Name on card</label><input id=cn name=ccname>
+  <label for=num>Card number</label><input id=num name=cardnumber inputmode=numeric>
+  <label for=exp>Expiry (MM / YY)</label><input id=exp name=exp maxlength=7>
+  <label for=cvc>CVC</label><input id=cvc name=cvc maxlength=4>
+  <label><input type=checkbox name=terms> I agree</label>
+  <button>Pay</button></form>`);
+const CARDFRAME = page(`<form><input name=cardnumber autocomplete=cc-number>
+  <select name=mm autocomplete=cc-exp-month><option value="">MM</option>${Array.from({ length: 12 }, (_, i) => `<option value="${i + 1}">${String(i + 1).padStart(2, '0')}</option>`).join('')}</select>
+  <select name=yy autocomplete=cc-exp-year><option value="">YY</option><option value="30">30</option><option value="31">31</option></select>
+  <input name=cvc autocomplete=cc-csc></form>`);
+const FRAMED = (framePort) => page(`<form method=post action=/submit>
+  <input name=fname autocomplete=given-name><label for=cn>Cardholder name</label><input id=cn name=ccname>
+  <iframe id=pay src="http://localhost:${framePort}/cardframe"></iframe><button>Pay</button></form>`);
 const IDENTITY = { first_name: 'Testa', last_name: 'Personovich', email: 'tester@example.com', username: 'tester1', country: 'Israel', phone: '+972500000000' };
-const FORBIDDEN = ['ak_fake_shown_once_42', 'cs_fake_copy_button_77', 'pw_fake_masked_99', API_KEY, 'ZmFrZQ==', SECRET_PW, 'alice@example.com', IDENTITY.email, IDENTITY.last_name, IDENTITY.phone];
+const FORBIDDEN = ['4242424242424242', '4242 4242', CARD.cardholder_name, 'ak_fake_shown_once_42', 'cs_fake_copy_button_77', 'pw_fake_masked_99', API_KEY, 'ZmFrZQ==', SECRET_PW, 'alice@example.com', IDENTITY.email, IDENTITY.last_name, IDENTITY.phone];
 const APIKEYS = page(`<form method=post action=/submit>
   <label for=acct>Account ID</label><input id=acct name=account>
   <label for=key>API key</label><input id=key name=api_key type=password>
@@ -60,6 +76,9 @@ function startSite() {
       return;
     }
     res.setHeader('content-type', 'text/html');
+    if (req.url.startsWith('/checkout')) return res.end(CHECKOUT);
+    if (req.url.startsWith('/cardframe')) return res.end(CARDFRAME);
+    if (req.url.startsWith('/framed')) return res.end(FRAMED(srv.address().port));
     res.end(req.url.startsWith('/otp') ? OTP : req.url.startsWith('/trap') ? TRAP : req.url.startsWith('/signup') ? SIGNUP : req.url.startsWith('/apikeys') ? APIKEYS : req.url.startsWith('/keys') ? KEYS : req.url.startsWith('/emailonly') ? LOGIN.replace('type=text', 'type=email') : LOGIN);
   });
   return new Promise((r) => srv.listen(0, '127.0.0.1', () => r({ srv, port: srv.address().port, posts })));
@@ -76,7 +95,7 @@ async function launch(dir, extra) {
 // Tiny CDP helper for the test itself (open pages, read values back).
 async function cdpEval(endpoint, urlPart, expr) {
   const list = await (await fetch(`${endpoint}/json/list`)).json();
-  const t = list.find((x) => x.type === 'page' && x.url.includes(urlPart));
+  const t = list.find((x) => (x.type === 'page' || x.type === 'iframe') && x.url.includes(urlPart));
   const ws = new WebSocket(t.webSocketDebuggerUrl);
   await new Promise((r) => (ws.onopen = r));
   const out = await new Promise((r) => {
@@ -99,7 +118,7 @@ async function mcp(home) {
   const client = new Client({ name: 'test', version: '1' });
   await client.connect(new StdioClientTransport({
     command: path.join(REPO, 'bin/agent-autofill-mcp'),
-    env: { ...process.env, AGENT_AUTOFILL_HOME: home, AGENT_AUTOFILL_NO_DIALOG: '1', AGENT_AUTOFILL_DEMO_USERNAME: 'alice@example.com', AGENT_AUTOFILL_DEMO_PASSWORD: SECRET_PW, AGENT_AUTOFILL_DEMO_TOTP_SECRET: TOTP_SECRET, AGENT_AUTOFILL_IDENTITY_TESTER: JSON.stringify(IDENTITY),
+    env: { ...process.env, AGENT_AUTOFILL_HOME: home, AGENT_AUTOFILL_NO_DIALOG: '1', AGENT_AUTOFILL_DEMO_USERNAME: 'alice@example.com', AGENT_AUTOFILL_DEMO_PASSWORD: SECRET_PW, AGENT_AUTOFILL_DEMO_TOTP_SECRET: TOTP_SECRET, AGENT_AUTOFILL_IDENTITY_TESTER: JSON.stringify(IDENTITY), AGENT_AUTOFILL_CARD_VISA: JSON.stringify(CARD),
       AGENT_AUTOFILL_DEMO_FIELD_ACCOUNT_ID: 'acct-123', AGENT_AUTOFILL_DEMO_SECRET_API_KEY: API_KEY, AGENT_AUTOFILL_DEMO_FIELD_PEM: PEM, AGENT_AUTOFILL_DEMO_FLAG_SANDBOX: 'true' },
   }));
   const call = async (name, args) => {
@@ -111,9 +130,12 @@ async function mcp(home) {
   return { client, call };
 }
 
+const cardGrant = (origin, { frames = [], submit = false } = {}) =>
+  `  - kind: card\n    vault: ci\n    item: card-visa\n    origins: ${JSON.stringify([origin])}\n${frames.length ? `    frame_origins: ${JSON.stringify(frames)}\n` : ''}    allow_submit: ${submit}\n`;
+
 function writePolicy(home, origins, signupOrigins = ['http://127.0.0.1:*'], visible = false, extra = '') {
   fs.mkdirSync(home, { recursive: true });
-  fs.writeFileSync(path.join(home, 'policy.yaml'), `vaults:\n  ci:\n    type: env\ngrants:\n  - vault: ci\n    item: demo\n    origins: ${JSON.stringify(origins)}\n${visible ? '    allow_visible_secrets: true\n' : ''}  - kind: signup\n    vault: ci\n    item: tester\n    origins: ${JSON.stringify(signupOrigins)}\n${extra}`);
+  fs.writeFileSync(path.join(home, 'policy.yaml'), `vaults:\n  ci:\n    type: env\n    item_types: [login, identity, card]\ngrants:\n  - vault: ci\n    item: demo\n    origins: ${JSON.stringify(origins)}\n${visible ? '    allow_visible_secrets: true\n' : ''}  - kind: signup\n    vault: ci\n    item: tester\n    origins: ${JSON.stringify(signupOrigins)}\n${extra}`);
 }
 
 test('e2e', { skip: !chromium && 'Playwright Chromium not installed', timeout: 120_000 }, async (t) => {
@@ -126,9 +148,9 @@ test('e2e', { skip: !chromium && 'Playwright Chromium not installed', timeout: 1
 
   t.after(async () => { await client.close(); site.srv.close(); });
 
-  await t.test('tools list is exactly the five tools', async () => {
+  await t.test('tools list is exactly the six tools', async () => {
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map((x) => x.name).sort(), ['fill_login', 'fill_signup', 'list_logins', 'request_authorization', 'save_from_page']);
+    assert.deepEqual(tools.map((x) => x.name).sort(), ['fill_details', 'fill_login', 'fill_signup', 'list_logins', 'request_authorization', 'save_from_page']);
   });
 
   await t.test('list_logins shows approvals, not secrets', async () => {
@@ -315,6 +337,72 @@ test('e2e', { skip: !chromium && 'Playwright Chromium not installed', timeout: 1
     writePolicy(home, ['http://127.0.0.1:*']);
   });
 
+  await t.test('fill_details: identity details and payment cards (CDP)', async (t2) => {
+    const b = await launch(path.join(tmp, 'details'), []);
+    t2.after(() => b.proc.kill());
+    const frameOrigin = `http://localhost:${site.port}`;
+
+    let r = await call('list_logins', {});
+    assert.deepEqual(r.json.cards, [{ card: 'visa', id: 'card-visa', vault: 'ci', brand: 'Visa', has: ['cardholder_name', 'number', 'exp_month', 'exp_year', 'code'], approved_origins: [], approved_frame_origins: [], can_submit: false }]);
+    assert.deepEqual(r.json.identities[0].approved_details_origins, ['http://127.0.0.1:*'], 'a signup approval also covers filling details');
+
+    await openPage(b.endpoint, `${base}/checkout`);
+    const tgt = { type: 'cdp', endpoint: b.endpoint, url_contains: '/checkout' };
+    r = await call('fill_details', { card: 'visa', target: tgt });
+    assert.ok(r.error && /card "visa" is not approved for http:\/\/127\.0\.0\.1/.test(r.text), r.text);
+    r = await call('request_authorization', { card: 'visa', origins: ['http://127.0.0.1:*'] });
+    assert.ok(r.error && /exact sites/.test(r.text), r.text);
+    r = await call('request_authorization', { card: '*', origins: [base] });
+    assert.ok(r.error && /one card/.test(r.text), r.text);
+
+    // A hand-written wildcard card approval is not honoured
+    writePolicy(home, ['http://127.0.0.1:*'], undefined, false, cardGrant('http://127.0.0.1:*'));
+    r = await call('fill_details', { card: 'visa', target: tgt });
+    assert.ok(r.error && /not approved/.test(r.text), r.text);
+
+    writePolicy(home, ['http://127.0.0.1:*'], undefined, false, cardGrant(base));
+    r = await call('fill_details', { identity: 'tester', card: 'visa', target: tgt });
+    assert.ok(!r.error, r.text);
+    assert.deepEqual(r.json.filled.sort(), ['card_code', 'card_exp', 'card_name', 'card_number', 'email', 'first_name', 'last_name']);
+    assert.ok(r.json.skipped.includes('country') && !r.json.filled.includes('username'));
+    const val = (sel) => cdpEval(b.endpoint, '/checkout', `document.querySelector(${JSON.stringify(sel)}).${sel.includes('checkbox') ? 'checked' : 'value'}`);
+    assert.equal(await val('#num'), '4242424242424242');
+    assert.equal(await val('#exp'), '07 / 31', 'formatted as the box asks (MM / YY)');
+    assert.equal(await val('#cvc'), '913');
+    assert.equal(await val('#cn'), CARD.cardholder_name);
+    assert.equal(await val('[name=fname]'), IDENTITY.first_name);
+    assert.equal(await val('input[type=checkbox]'), false, 'terms never ticked');
+    r = await call('fill_details', { card: 'visa', target: tgt, submit: true });
+    assert.ok(r.error && /does not allow submitting/.test(r.text), r.text);
+
+    // Card form inside a cross-site iframe: skipped until that frame origin is approved
+    await openPage(b.endpoint, `${base}/framed`);
+    const ftgt = { type: 'cdp', endpoint: b.endpoint, url_contains: '/framed' };
+    r = await call('fill_details', { card: 'visa', target: ftgt });
+    assert.ok(!r.error, r.text);
+    assert.deepEqual(r.json.filled, ['card_name']);
+    assert.ok(r.json.skipped.includes('card_number'));
+    assert.equal(await cdpEval(b.endpoint, '/cardframe', 'document.querySelector("[name=cardnumber]").value'), '');
+
+    writePolicy(home, ['http://127.0.0.1:*'], undefined, false, cardGrant(base, { frames: [frameOrigin], submit: true }));
+    r = await call('fill_details', { identity: 'tester', card: 'visa', target: ftgt });
+    assert.ok(!r.error, r.text);
+    assert.deepEqual(r.json.filled_in_frames, { card_number: frameOrigin, card_exp_month: frameOrigin, card_exp_year: frameOrigin, card_code: frameOrigin });
+    assert.ok(r.json.filled.includes('first_name') && r.json.filled.includes('card_name'));
+    const fv = (sel) => cdpEval(b.endpoint, '/cardframe', `document.querySelector(${JSON.stringify(sel)}).value`);
+    assert.equal(await fv('[name=cardnumber]'), '4242424242424242');
+    assert.equal(await fv('[name=mm]'), '7');
+    assert.equal(await fv('[name=yy]'), '31');
+    assert.equal(await fv('[name=cvc]'), '913');
+    assert.equal(r.json.submitted, false);
+    r = await call('fill_details', { identity: 'tester', card: 'visa', target: ftgt, submit: true });
+    assert.ok(!r.error, r.text);
+    assert.equal(r.json.submitted, true, 'submitted from the top page after filling the frame');
+    await new Promise((res) => setTimeout(res, 500));
+    assert.deepEqual(site.posts.pop(), { fname: IDENTITY.first_name, ccname: CARD.cardholder_name });
+    writePolicy(home, ['http://127.0.0.1:*']);
+  });
+
   await t.test('Chrome extension channel', async (t2) => {
     const prof = path.join(tmp, 'ext');
     execFileSync(path.join(REPO, 'bin/agent-autofill'), ['install', '--dir', path.join(prof, 'NativeMessagingHosts'), '--quiet'], { env: { ...process.env, AGENT_AUTOFILL_HOME: home } });
@@ -349,6 +437,15 @@ test('e2e', { skip: !chromium && 'Playwright Chromium not installed', timeout: 1
     assert.ok(!r.error, r.text);
     assert.equal(await cdpEval(b.endpoint, '/apikeys?ext', 'document.querySelector("#key").value'), API_KEY);
     assert.equal(await cdpEval(b.endpoint, '/apikeys?ext', 'document.querySelector("#sandbox").checked'), true);
+
+    // Card in a payment iframe through the extension
+    writePolicy(home, ['http://127.0.0.1:*'], undefined, false, cardGrant(base, { frames: [`http://localhost:${site.port}`] }));
+    await openPage(b.endpoint, `${base}/framed?ext`);
+    r = await call('fill_details', { card: 'visa', target: { type: 'chrome', url_contains: '/framed?ext' } });
+    assert.ok(!r.error, r.text);
+    assert.equal(r.json.filled_in_frames.card_number, `http://localhost:${site.port}`);
+    assert.equal(await cdpEval(b.endpoint, '/cardframe', 'document.querySelector("[name=cardnumber]").value'), '4242424242424242');
+    writePolicy(home, ['http://127.0.0.1:*']);
 
     // A second Chrome profile with the extension: each gets its own socket, fills are routed
     const prof2 = path.join(tmp, 'ext2');

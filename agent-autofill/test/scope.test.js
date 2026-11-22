@@ -13,13 +13,29 @@ const VAULT = fs.readFileSync(path.join(path.dirname(FAKE_BW), 'vault.json'), 'u
 process.env.BW_SESSION = 'test-session';
 const vault = (cfg) => create({ type: 'bitwarden', bw_bin: FAKE_BW, ...cfg });
 
-test('a scope is required and only logins/identities can be enabled', () => {
+test('a scope is required; cards are opt-in; notes and keys never', () => {
   assert.throws(() => normalizeScope({}), /set folders, collections or organizations/);
   assert.throws(() => normalizeScope({ scope: 'everything' }), /scope must be "all"/);
   assert.throws(() => normalizeScope({ scope: 'all', folders: ['ai'] }), /not both/);
-  for (const t of ['card', 'note', 'secure_note', 'ssh_key']) assert.throws(() => normalizeScope({ folder: 'ai', item_types: [t] }), /can never be enabled/);
+  for (const t of ['note', 'secure_note', 'ssh_key']) assert.throws(() => normalizeScope({ folder: 'ai', item_types: [t] }), /can never be enabled/);
   assert.throws(() => normalizeScope({ folder: 'ai', item_types: ['passkey'] }), /unknown item_types/);
   assert.deepEqual(normalizeScope({ folder: 'ai' }).types, ['login', 'identity']);
+  assert.deepEqual(normalizeScope({ folder: 'ai', item_types: ['login', 'card'] }).types, ['login', 'card']);
+});
+
+test('cards: hidden by default, listed without numbers when enabled, exclude_fields applies', async () => {
+  assert.deepEqual(await vault({ folders: ['ai'] }).listCards(), [], 'not enabled: no cards');
+  const v = vault({ folders: ['ai'], item_types: ['login', 'identity', 'card'], exclude_fields: ['code'] });
+  const cards = await v.listCards();
+  assert.deepEqual(cards, [{ id: 'i2', name: 'Visa card', brand: 'Visa', has: ['cardholder_name', 'number', 'exp_month', 'exp_year'] }]);
+  assert.ok(!JSON.stringify(cards).includes('4111'), 'listing never shows the number');
+  const c = await v.card('i2');
+  assert.equal(c.number, '4111111111111111', 'spaces removed');
+  assert.equal(c.exp_month, '03');
+  assert.equal(c.exp_year, '2029');
+  assert.equal(c.code, undefined, 'excluded field is never read');
+  await assert.rejects(v.card('i1'), /card not found/, 'a login id is not a card');
+  assert.equal((await v.list()).some((i) => i.name === 'Visa card'), false, 'cards are not logins');
 });
 
 test('folder scope: cards, notes, deleted, other folders and excluded items never appear', async () => {
@@ -63,5 +79,5 @@ test('scope: all still never exposes cards or notes', async () => {
 });
 
 test('fixture sanity: the fake vault really contains the things we hide', () => {
-  for (const s of ['4111111111111111', 'note-should-never-leak', 'rc-should-never-leak']) assert.ok(VAULT.includes(s));
+  for (const s of ['4111 1111 1111 1111', 'note-should-never-leak', 'rc-should-never-leak']) assert.ok(VAULT.includes(s));
 });

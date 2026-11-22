@@ -8,15 +8,15 @@
 //     collections: [Agents]              # organization collections, by name or id
 //     organizations: [NYO]               # whole organizations, by name or id
 //     scope: all                         # instead of the three above: the whole vault (not recommended)
-//     item_types: [login, identity]      # default; nothing else can be enabled
+//     item_types: [login, identity]      # default; add card to let agents fill payment cards (opt-in)
 //     exclude_items: ["github.com", "<item id>"]
 //     exclude_fields: ["Recovery codes", "phone"]   # custom fields and identity fields, never read
 //     save_folder: ai                    # where fill_signup saves new logins (default: first folder)
 
 // Bitwarden item types: 1 login, 2 secure note, 3 card, 4 identity, 5 SSH key.
-// Only logins and identities can ever be read; cards, notes and keys are not supported at all.
-export const TYPE_IDS = { login: 1, identity: 4 };
-const NEVER = { card: 3, note: 2, secure_note: 2, ssh_key: 5 };
+// Logins and identities by default; cards only when listed in item_types. Notes and keys never.
+export const TYPE_IDS = { login: 1, identity: 4, card: 3 };
+const NEVER = { note: 2, secure_note: 2, ssh_key: 5 };
 
 export function normalizeScope(cfg = {}) {
   const list = (x) => (x == null ? [] : Array.isArray(x) ? x.map(String) : [String(x)]);
@@ -33,8 +33,8 @@ export function normalizeScope(cfg = {}) {
   }
   const types = list(cfg.item_types ?? ['login', 'identity']).map((t) => t.toLowerCase());
   for (const t of types) {
-    if (NEVER[t]) throw new Error(`bitwarden vault: item_types "${t}" can never be enabled; only login and identity are supported`);
-    if (!TYPE_IDS[t]) throw new Error(`bitwarden vault: unknown item_types "${t}" (supported: login, identity)`);
+    if (NEVER[t]) throw new Error(`bitwarden vault: item_types "${t}" can never be enabled; supported: login, identity, card`);
+    if (!TYPE_IDS[t]) throw new Error(`bitwarden vault: unknown item_types "${t}" (supported: login, identity, card)`);
   }
   return {
     all, folders, collections, organizations, types,

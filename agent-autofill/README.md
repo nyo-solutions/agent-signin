@@ -14,10 +14,11 @@ agent ──fill_login("github.com", tab 123)──▶ MCP server ──secret�
 
 | Tool | What it does |
 |---|---|
-| `list_logins` | login and identity names, saved sites, approved origins, which fields exist. No secrets or personal details. |
-| `request_authorization` | shows **you** a macOS dialog (Deny / Allow 1 hour / Always allow) for a `login` (sign in) or an `identity` (sign up). Your answer is written to the allow-list. The agent cannot approve. |
+| `list_logins` | login, identity and card names, saved sites, card brands, approved origins, which fields exist. No secrets, card numbers or personal details. |
+| `request_authorization` | shows **you** a macOS dialog (Deny / Allow 1 hour / Always allow) for a `login` (sign in), an `identity` (sign up, or `identity_use: "details"` to fill contact/address forms) or a `card` (checkout). Your answer is written to the allow-list. The agent cannot approve. |
 | `fill_login` | fills username / password / TOTP and **custom vault fields** (API keys, client ids and secrets, certificates, checkboxes) into a page and optionally submits. Refuses unless the page's real origin is approved for that login. |
 | `save_from_page` | saves a value shown on a page (API key, client secret, generated password, 2FA secret) straight into the vault: the agent points at the element, the value never passes through it. Creates an item or adds to an existing one; replacing a different value needs `overwrite_allowed` (default configurable). No approval needed. |
+| `fill_details` | fills checkout, shipping, billing and contact forms from an identity and/or a payment card: name, email, phone, address, and card holder, number, expiry (one `MM/YY` box or month/year dropdowns, formatted as the form expects) and security code. Card fields inside a payment provider's iframe (e.g. `https://js.stripe.com`) are filled only if you approved that frame origin. Doesn't submit a card form unless the approval allows it. Never ticks terms/consent boxes. |
 | `fill_signup` | fills a registration form from an identity (name, email, username, phone, company, address, country dropdowns) plus a password, and optionally submits. By default it generates a strong password and **saves it to the vault as a new login before typing it**, then approves that login for the site so the agent can sign in later with `fill_login`. Or it reuses an approved existing login (`credentials: { login }`). Never ticks terms/consent boxes. |
 
 ### Saving values from a page (`save_from_page`)
@@ -124,7 +125,8 @@ vaults:
     # organizations: [NYO]          # whole organizations
     # exclude_items: [bank.example] # never readable, even inside the scope
     # exclude_fields: [Recovery codes, phone]   # custom or identity fields never read
-    # item_types: [login]           # default [login, identity]; cards, notes, SSH keys can't be enabled
+    # item_types: [login, identity, card]   # default [login, identity]; add card to fill payment cards. Notes and SSH keys can't be enabled
+    # exclude_fields: [code]        # e.g. never read card security codes
     # save_folder: ai               # where fill_signup saves new logins (default: first folder)
 default_vault: bitwarden
 cdp:
@@ -141,18 +143,37 @@ grants:                             # written by the dialog or `agent-autofill a
     item_name: Test persona
     origins: ["http://localhost:*", "https://*.sara.test"]
     allow_submit: true
+  - kind: identity                  # identity details for fill_details (a signup grant also covers this)
+    vault: bitwarden
+    item: <identity item id>
+    origins: ["https://shop.example"]
+  - kind: card                      # one card, exact sites only (wildcards are refused)
+    vault: bitwarden
+    item: <card item id>
+    item_name: Test Visa
+    origins: ["https://shop.example"]
+    frame_origins: ["https://js.stripe.com"]   # iframes on that site that hold the card fields
+    allow_submit: false             # default for cards: the final "Pay" click stays yours
 ```
 
 **Vault scope.** A Bitwarden vault must name what agents may reach (`folders`, `collections`,
-`organizations`, or `scope: all` to opt into the whole vault). Only **logins and identities** are ever
-read: credit cards, secure notes and SSH keys are not supported at all, so they can't be exposed even by
-mistake, and identity government IDs (SSN, passport, licence) are never read. `exclude_items` and
+`organizations`, or `scope: all` to opt into the whole vault). By default only **logins and identities**
+are read. **Payment cards** are read only if you add `card` to `item_types`; secure notes and SSH keys
+are not supported at all, so they can't be exposed even by mistake, and identity government IDs (SSN,
+passport, licence) are never read. `exclude_items` and
 `exclude_fields` carve out exceptions inside the scope. You can configure several vaults (e.g. a `test`
 and a `staging` folder) and agents pick one with the `vault` parameter.
 
 Origin patterns: exact `https://app.example.com`; `https://*.example.com` (domain + subdomains);
 `http://localhost:*` (any port); `https://*` (any HTTPS site); `*` (**any site**, which turns off the
 anti-phishing check, so use it with care). A login can't be filled anywhere until it's in `grants`.
+
+**Card approvals are stricter.** A card grant names one card and exact sites. Wildcard sites and `"*"` for
+the card are refused by the dialog and the CLI, and ignored if written into the file by hand. Payment
+iframes need their exact origin in `frame_origins`. `allow_submit` defaults to false, so the agent can fill
+the checkout but the tool won't press Pay. Filled card details are visible in the page, so an agent that
+takes screenshots or reads the page can see them. Approve only checkout pages you trust, and prefer test
+cards or virtual cards with a spending limit.
 
 ## Setup (once)
 
@@ -171,10 +192,13 @@ agent-autofill list                             # approvals
 agent-autofill allow github.com https://github.com [--hours 8] [--no-submit]
 agent-autofill allow '*' 'http://localhost:*'   # every login, any local port
 agent-autofill allow --signup 'Test persona' 'https://*.sara.test'   # sign-ups with an identity
+agent-autofill allow --details 'Test persona' https://shop.example    # contact / address forms
+agent-autofill allow --card 'Test Visa' https://shop.example --frame https://js.stripe.com [--submit]
 agent-autofill revoke github.com [origin]
 agent-autofill doctor
 ```
-CI / headless: use the `env` vault (`AGENT_AUTOFILL_<NAME>_USERNAME|_PASSWORD|_TOTP_SECRET`), commit or
+CI / headless: use the `env` vault (`AGENT_AUTOFILL_<NAME>_USERNAME|_PASSWORD|_TOTP_SECRET`,
+`AGENT_AUTOFILL_IDENTITY_<NAME>` and `AGENT_AUTOFILL_CARD_<NAME>` as JSON, cards with `item_types` including `card`), commit or
 generate a policy with grants, and set `AGENT_AUTOFILL_HOME`. No dialog is shown there.
 
 ## Safeguards
@@ -198,4 +222,4 @@ reporting, and no secret or personal detail in any tool output.
 
 ## Adding a vault vendor
 
-Add `src/vaults/<vendor>.js` exporting `create(config)` → `{ list, find, secrets }` (plus `listIdentities`, `findIdentity`, `identity`, `createLogin` for sign-ups) (see `src/vaults/index.js`), and register it there.
+Add `src/vaults/<vendor>.js` exporting `create(config)` → `{ list, find, secrets }` (plus `listIdentities`, `findIdentity`, `identity`, `createLogin` for sign-ups, and `listCards`, `findCard`, `card` for cards) (see `src/vaults/index.js`), and register it there.

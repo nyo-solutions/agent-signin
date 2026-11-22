@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { findGrant, originMatches, parsePattern } from '../src/policy.js';
+import { findGrant, matchingGrants, originMatches, parsePattern } from '../src/policy.js';
 import { totp } from '../src/totp.js';
 import { generatePassword } from '../src/password.js';
 
@@ -75,4 +75,18 @@ test('visible-secret approvals never merge with ordinary ones', async () => {
   assert.deepEqual(policy.grants[0].origins, ['https://a.test', 'https://c.test']);
   assert.ok(!matchingGrants(policy, { vault: 'v', itemId: 'x', origin: 'https://a.test' }).some((g) => g.allow_visible_secrets));
   assert.ok(matchingGrants(policy, { vault: 'v', itemId: 'x', origin: 'https://b.test' }).some((g) => g.allow_visible_secrets));
+});
+
+test('card grants: exact sites and one card only, even when written by hand', () => {
+  const policy = { grants: [
+    { kind: 'card', vault: 'v', item: 'c1', origins: ['https://shop.example'], allow_submit: false },
+    { kind: 'card', vault: 'v', item: 'c1', origins: ['https://*.example'], allow_submit: true },
+    { kind: 'card', vault: 'v', item: '*', origins: ['https://other.example'], allow_submit: true },
+    { kind: 'identity', vault: 'v', item: 'p1', origins: ['https://*.example'] },
+  ] };
+  assert.ok(findGrant(policy, { vault: 'v', itemId: 'c1', origin: 'https://shop.example', kind: 'card' }));
+  assert.equal(matchingGrants(policy, { vault: 'v', itemId: 'c1', origin: 'https://shop.example', kind: 'card' }).length, 1, 'wildcard card grant ignored');
+  assert.equal(findGrant(policy, { vault: 'v', itemId: 'c1', origin: 'https://other.example', kind: 'card' }), undefined, 'item "*" card grant ignored');
+  assert.equal(findGrant(policy, { vault: 'v', itemId: 'c1', origin: 'https://shop.example' }), undefined, 'a card grant is not a login grant');
+  assert.ok(findGrant(policy, { vault: 'v', itemId: 'p1', origin: 'https://a.example', kind: 'identity' }), 'identity details grants may use wildcards');
 });

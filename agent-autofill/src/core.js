@@ -4,10 +4,12 @@ import { audit } from './audit.js';
 import { askUser } from './authorize.js';
 import { chromeFill, chromeRead, chromeTarget } from './channels/extension.js';
 import { cdpFill, cdpRead, cdpTarget } from './channels/cdp.js';
-import { addGrant, findGrant, grantsForItem, matchingGrants, isWildcard, loadPolicy, normalizeOrigin, originMatches, parsePattern, pruneExpired, updatePolicy, vaultName } from './policy.js';
+import { addGrant, cardGrantProblem, findGrant, grantsForItem, matchingGrants, isWildcard, loadPolicy, normalizeOrigin, originMatches, parsePattern, pruneExpired, updatePolicy, vaultName } from './policy.js';
 import { withLock } from './lock.js';
 import { openVault } from './vaults/index.js';
 import { generatePassword } from './password.js';
+import { CARD_KINDS, cardFillValues } from './vaults/card-fields.js';
+import { IDENTITY_FIELDS } from './vaults/identity-fields.js';
 
 const vaultLabel = (name, v) => `${name}, ${v.scope}`;
 
@@ -36,33 +38,68 @@ export async function listLogins() {
     const v = openVault(name, cfg);
     if (!v.listIdentities) continue;
     for (const id of await v.listIdentities()) {
-      identities.push({ identity: id.name, id: id.id, vault: name, has: id.has, approved_signup_origins: [...new Set(grantsForItem(policy, name, id.id, 'signup').flatMap((g) => g.origins))] });
+      const sites = (kind) => [...new Set(grantsForItem(policy, name, id.id, kind).flatMap((g) => g.origins))];
+      identities.push({ identity: id.name, id: id.id, vault: name, has: id.has, approved_signup_origins: sites('signup'), approved_details_origins: [...new Set([...sites('identity'), ...sites('signup')])] });
+    }
+  }
+  const cards = [];
+  for (const [name, cfg] of Object.entries(policy.vaults)) {
+    const v = openVault(name, cfg);
+    if (!v.listCards) continue;
+    for (const c of await v.listCards()) {
+      const grants = grantsForItem(policy, name, c.id, 'card');
+      cards.push({
+        card: c.name, id: c.id, vault: name, ...(c.brand && { brand: c.brand }), has: c.has,
+        approved_origins: [...new Set(grants.flatMap((g) => g.origins))],
+        approved_frame_origins: [...new Set(grants.flatMap((g) => g.frame_origins || []))],
+        can_submit: grants.some((g) => g.allow_submit),
+      });
     }
   }
   return {
     logins: out,
     identities,
-    hint: 'Logins with approved_origins can be filled there with fill_login; identities with approved_signup_origins can be used there with fill_signup. For anything else call request_authorization; only the user can approve.',
+    ...(cards.length && { cards }),
+    hint: 'Logins with approved_origins can be filled there with fill_login; identities with approved_signup_origins can be used there with fill_signup, and with approved_details_origins with fill_details; cards with approved_origins can be filled there with fill_details. For anything else call request_authorization; only the user can approve.',
   };
 }
 
-export async function requestAuthorization({ login, identity, vault, origins, allow_submit = true, allow_visible_secrets = false, reason }) {
-  if (Boolean(login) === Boolean(identity)) throw new Error('pass exactly one of login (to sign in) or identity (to sign up)');
-  const kind = identity ? 'signup' : 'login';
-  const ref = login || identity;
+const ITEM_WORD = { login: 'login', signup: 'identity', identity: 'identity', card: 'card' };
+
+export async function requestAuthorization({ login, identity, card, identity_use = 'signup', vault, origins, frame_origins = [], allow_submit, allow_visible_secrets = false, reason }) {
+  if ([login, identity, card].filter(Boolean).length !== 1) throw new Error('pass exactly one of login (to sign in), identity (to sign up or fill details) or card (to fill a payment card)');
+  if (!['signup', 'details'].includes(identity_use)) throw new Error('identity_use must be "signup" or "details"');
+  const kind = login ? 'login' : card ? 'card' : identity_use === 'details' ? 'identity' : 'signup';
+  const word = ITEM_WORD[kind];
+  if (frame_origins.length && !['identity', 'card'].includes(kind)) throw new Error('frame_origins only applies to identity details (identity_use "details") and cards');
+  if (allow_visible_secrets && kind !== 'login') throw new Error('allow_visible_secrets only applies to logins');
+  allow_submit ??= kind !== 'card'; // submitting a card form can complete a payment: off unless asked for
+  const ref = login || identity || card;
   const policy = loadPolicy();
   const vName = vaultName(policy, vault);
   const v = openVault(vName, policy.vaults[vName]);
-  if (kind === 'signup' && !v.findIdentity) throw new Error(`vault ${vName} has no identities`);
+  if (word === 'identity' && !v.findIdentity) throw new Error(`vault ${vName} has no identities`);
+  if (kind === 'card' && !v.findCard) throw new Error(`vault ${vName} has no cards`);
   const allItems = ref === '*';
-  const item = allItems ? null : kind === 'signup' ? await v.findIdentity(ref) : await v.find(ref);
-  if (!allItems && !item) throw new Error(`${kind === 'signup' ? 'identity' : 'login'} "${ref}" is not in vault ${vaultLabel(vName, v)}`);
+  const item = allItems ? null : word === 'identity' ? await v.findIdentity(ref) : kind === 'card' ? await v.findCard(ref) : await v.find(ref);
+  if (!allItems && !item) {
+    const hint = kind === 'card' ? ' (cards need item_types: [login, identity, card] in the vault config)' : '';
+    throw new Error(`${word} "${ref}" is not in vault ${vaultLabel(vName, v)}${hint}`);
+  }
   const pats = origins.map((o) => (isWildcard(o) ? o : normalizeOrigin(o)));
   pats.forEach(parsePattern);
+  const frames = frame_origins.map((o) => { if (isWildcard(o)) throw new Error(`frame_origins must be exact origins, not "${o}"`); return normalizeOrigin(o); });
+  if (kind === 'card') {
+    const problem = cardGrantProblem({ item: allItems ? '*' : item.id, origins: pats });
+    if (problem) throw new Error(`${problem}: ask for one card and the exact checkout site(s)`);
+  }
 
-  const covered = (pol, p) => { const g = findGrant(pol, { vault: vName, itemId: item.id, origin: p, kind }); return g && (!allow_visible_secrets || g.allow_visible_secrets); };
+  const covered = (pol, p) => {
+    const gs = matchingGrants(pol, { vault: vName, itemId: item.id, origin: p, kind });
+    return gs.some((g) => (!allow_visible_secrets || g.allow_visible_secrets) && (!allow_submit || g.allow_submit) && frames.every((f) => (g.frame_origins || []).includes(f)));
+  };
   const already = (pol) => !allItems && pats.every((p) => !isWildcard(p) && covered(pol, p));
-  const alreadyResult = () => ({ approved: true, already: true, [kind === 'signup' ? 'identity' : 'login']: item.name, origins: pats });
+  const alreadyResult = () => ({ approved: true, already: true, [word]: item.name, origins: pats });
   if (already(policy)) return alreadyResult();
   const itemSites = item?.uris ? item.uris.map((u) => { try { return normalizeOrigin(u); } catch { return u; } }) : [];
   const siteMismatch = Boolean(item?.uris) && pats.some((p) => !isWildcard(p) && !itemSites.includes(p));
@@ -71,18 +108,19 @@ export async function requestAuthorization({ login, identity, vault, origins, al
   // request may have been approved already: re-check, so the user isn't asked twice.
   return withLock('dialog', async () => {
   if (already(loadPolicy())) return alreadyResult();
-  const answer = await askUser({ purpose: kind, allowVisibleSecrets: allow_visible_secrets, itemName: item?.name, itemSites, vaultLabel: vaultLabel(vName, v), origins: pats, allItems, allowSubmit: allow_submit, reason, siteMismatch });
+  const answer = await askUser({ purpose: kind, frameOrigins: frames, allowVisibleSecrets: allow_visible_secrets, itemName: item?.name, itemSites, vaultLabel: vaultLabel(vName, v), origins: pats, allItems, allowSubmit: allow_submit, reason, siteMismatch });
   audit({ action: 'authorize', kind, vault: vName, item: item?.name ?? '*', origins: pats, answer });
   if (answer === 'deny') return { approved: false, message: 'The user denied this request. Do not retry unless the user asks you to.' };
 
   await updatePolicy((fresh) => {
   pruneExpired(fresh);
   addGrant(fresh, {
-    ...(kind === 'signup' && { kind }),
+    ...(kind !== 'login' && { kind }),
     vault: vName,
     item: allItems ? '*' : item.id,
     item_name: allItems ? `ALL (${v.scope})` : item.name,
     origins: pats,
+    ...(frames.length && { frame_origins: frames }),
     allow_submit,
     ...(allow_visible_secrets && { allow_visible_secrets: true }),
     ...(answer === 'hour' && { expires_at: new Date(Date.now() + 3600_000).toISOString() }),
@@ -90,7 +128,7 @@ export async function requestAuthorization({ login, identity, vault, origins, al
     approved_via: 'dialog',
   });
   });
-  return { approved: true, [kind === 'signup' ? 'identity' : 'login']: item?.name ?? '*', origins: pats, ...(answer === 'hour' && { expires_in: '1 hour' }) };
+  return { approved: true, [word]: item?.name ?? '*', origins: pats, ...(frames.length && { frame_origins: frames }), allow_submit, ...(answer === 'hour' && { expires_in: '1 hour' }) };
   }, { timeoutMs: 15 * 60_000, staleMs: 5 * 60_000 });
 }
 
@@ -254,6 +292,81 @@ export async function fillSignup({ identity, vault, target, credentials = 'gener
     throw err;
   }
   return { ...result, identity: idItem.name, ...(reused && { used_login: reused }), ...savedInfo, ...(resolved.tab_id != null && { tab_id: resolved.tab_id, profile: resolved.profile }), ...(resolved.target_id && { target_id: resolved.target_id }) };
+}
+
+// fill_details: identity details (contact, shipping, billing address) and/or a payment card.
+// Card values go into the page only; the card approval names exact sites and, for payment
+// iframes, the exact frame origins. Card fields are filled before identity fields so a
+// "Name on card" box is not mistaken for the identity's name.
+export const DETAIL_KINDS = [...CARD_KINDS, ...IDENTITY_FIELDS];
+const AUTO_SKIP = new Set(['username']); // only filled when a selector asks for it
+
+export async function fillDetails({ identity, card, vault, target, fields, submit = false }) {
+  if (!identity && !card) throw new Error('pass identity, card, or both');
+  const policy = loadPolicy();
+  const vName = vaultName(policy, vault);
+  const v = openVault(vName, policy.vaults[vName]);
+  const idItem = identity ? await v.findIdentity?.(identity) : null;
+  if (identity && !idItem) throw new Error(`identity "${identity}" is not in vault ${vaultLabel(vName, v)}; see list_logins`);
+  const cardItem = card ? await v.findCard?.(card) : null;
+  if (card && !cardItem) throw new Error(`card "${card}" is not in vault ${vaultLabel(vName, v)}; see list_logins (cards need item_types including card in the vault config)`);
+
+  const explicit = fields && Object.keys(fields).length ? fields : null;
+  const unknown = explicit ? Object.keys(explicit).filter((k) => !DETAIL_KINDS.includes(k)) : [];
+  if (unknown.length) throw new Error(`unknown field(s): ${unknown.join(', ')} (known: ${DETAIL_KINDS.join(', ')})`);
+  if (explicit && !card && Object.keys(explicit).some((k) => CARD_KINDS.includes(k))) throw new Error('card fields were given but no card');
+  if (explicit && !identity && Object.keys(explicit).some((k) => IDENTITY_FIELDS.includes(k))) throw new Error('identity fields were given but no identity');
+
+  // 1. Real page origin, and the user's approvals for it.
+  const resolved = await resolveTarget(target, policy);
+  const origin = normalizeOrigin(resolved.url);
+  const idGrants = idItem ? [...matchingGrants(policy, { vault: vName, itemId: idItem.id, origin, kind: 'identity' }), ...matchingGrants(policy, { vault: vName, itemId: idItem.id, origin, kind: 'signup' })] : [];
+  const cardGrants = cardItem ? matchingGrants(policy, { vault: vName, itemId: cardItem.id, origin, kind: 'card' }) : [];
+  const refuse = (what, name, extra) => {
+    audit({ action: 'details', vault: vName, [what]: name, origin, result: 'not-approved' });
+    throw new Error(`${what} "${name}" is not approved for ${origin}. Call request_authorization with ${what} "${name}"${extra} and origin "${origin}"; the user decides.`);
+  };
+  if (idItem && !idGrants.length) refuse('identity', idItem.name, ', identity_use "details"');
+  if (cardItem && !cardGrants.length) refuse('card', cardItem.name, '');
+  if (submit && ((idItem && !idGrants.some((g) => g.allow_submit)) || (cardItem && !cardGrants.some((g) => g.allow_submit)))) {
+    throw new Error(`the approval${cardItem ? ` for card "${cardItem.name}"` : ''} on ${origin} does not allow submitting; fill without submit (the user can submit), or ask for allow_submit`);
+  }
+
+  // 2. Values, straight from the vault to the browser channel.
+  const vals = {
+    ...(cardItem && cardFillValues(await v.card(cardItem.id))),
+    ...(idItem && await v.identity(idItem.id)),
+  };
+  const groupOf = (k) => (CARD_KINDS.includes(k) ? 'card' : 'identity');
+  let kinds;
+  if (explicit) {
+    kinds = DETAIL_KINDS.filter((k) => k in explicit);
+    const missing = kinds.filter((k) => !vals[k]);
+    if (missing.length) throw new Error(`the ${missing.map((k) => (groupOf(k) === 'card' ? `card has no ${k}` : `identity has no ${k}`)).join(', ')}`);
+  } else {
+    kinds = DETAIL_KINDS.filter((k) => vals[k] && !AUTO_SKIP.has(k));
+  }
+  const frameOrigins = {
+    identity: [...new Set(idGrants.flatMap((g) => g.frame_origins || []))],
+    card: [...new Set(cardGrants.flatMap((g) => g.frame_origins || []))],
+  };
+  const req = {
+    mode: 'details', expectedOrigin: origin, frameOrigins, submit,
+    fields: kinds.map((k) => ({ kind: k, group: groupOf(k), selector: explicit?.[k], value: vals[k] })),
+  };
+  for (const k of Object.keys(vals)) vals[k] = undefined;
+  let result;
+  try {
+    result = await sendFill(target, resolved, req, policy);
+  } finally {
+    for (const f of req.fields) f.value = undefined;
+  }
+  audit({ action: 'details', vault: vName, identity: idItem?.name, card: cardItem?.name, origin, channel: target.type, result: result?.ok ? 'filled' : 'failed', fields: result?.filled, skipped: result?.skipped, frames: result?.filled_in_frames, submitted: result?.submitted });
+  if (!result?.ok) throw new Error(result?.error || 'fill failed');
+  return {
+    ...result, ...(idItem && { identity: idItem.name }), ...(cardItem && { card: cardItem.name }),
+    ...(resolved.tab_id != null && { tab_id: resolved.tab_id, profile: resolved.profile }), ...(resolved.target_id && { target_id: resolved.target_id }),
+  };
 }
 
 // Read one element of the page and store its value in the vault. No approval:

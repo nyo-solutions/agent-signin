@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Agent Autofill",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Fills user-approved vault logins into pages on request from the local agent-autofill tool. Secrets never pass through the AI agent.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoe9uUPqyZdGyqsdVbxy9j2UHlk/KQzg9DIESpvTA06oO4o/67AUWPhoPblEAJG+WhNNd6bh9boc66BqICsnsS5gz7wkDEmUgfhuWNX2O8eQOzAkgC6jKZk+SKCa6Gcv54u/NXdl59iwOLF4ENeHKNx1XvGV13yty4v8sUdVgpG+5TnNi265OxtpVVoFBSXecR4rbdtOIzmbhxswuadfsD+pgoP+DJPf5+ThRz9N1tdrHiM99DqvDtGwUEF1S4zDW/6slLVa7j8UeDmOeJ+Wg8JVjFdcBEJ5p/EUh2DsRgZJOiqbCB6zEJ+TT6kluecFKDFavcfVF8HsCEz+oqmtW5wIDAQAB",
   "minimum_chrome_version": "120",
