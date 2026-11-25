@@ -35,6 +35,8 @@ export function create(cfg) {
   let synced = 0;
 
   async function getSession() {
+    // Servers pass the session in (a string, or a function returning one, e.g. from unlockBitwarden()).
+    if (cfg.session) return typeof cfg.session === 'function' ? cfg.session() : cfg.session;
     if (process.env.BW_SESSION) return process.env.BW_SESSION;
     if (session) return session;
     if (!cfg.session_keychain_service) throw new Error('bitwarden: no BW_SESSION and no session_keychain_service configured');
@@ -49,7 +51,7 @@ export function create(cfg) {
 
   const CHANGES = new Set(['sync', 'create', 'edit', 'delete', 'move', 'restore']);
   async function bwJson(args) {
-    const env = { ...process.env, BW_SESSION: await getSession(), BW_NOINTERACTION: 'true' };
+    const env = { ...process.env, BW_SESSION: await getSession(), BW_NOINTERACTION: 'true', ...(cfg.appdata_dir && { BITWARDENCLI_APPDATA_DIR: cfg.appdata_dir }) };
     const call = () => run(bw, [...args, '--nointeraction'], { env, maxBuffer: 32 * 1024 * 1024 });
     try {
       let stdout;
@@ -140,7 +142,7 @@ export function create(cfg) {
   function bwWriteUnlocked(cmd, obj) {
     return new Promise(async (resolve, reject) => {
       let env;
-      try { env = { ...process.env, BW_SESSION: await getSession(), BW_NOINTERACTION: 'true' }; } catch (e) { return reject(e); }
+      try { env = { ...process.env, BW_SESSION: await getSession(), BW_NOINTERACTION: 'true', ...(cfg.appdata_dir && { BITWARDENCLI_APPDATA_DIR: cfg.appdata_dir }) }; } catch (e) { return reject(e); }
       const p = spawn(bw, [...cmd, '--nointeraction'], { env });
       let out = '', err = '';
       p.stdout.on('data', (d) => (out += d));

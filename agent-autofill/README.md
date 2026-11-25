@@ -201,6 +201,44 @@ CI / headless: use the `env` vault (`AGENT_AUTOFILL_<NAME>_USERNAME|_PASSWORD|_T
 `AGENT_AUTOFILL_IDENTITY_<NAME>` and `AGENT_AUTOFILL_CARD_<NAME>` as JSON, cards with `item_types` including `card`), commit or
 generate a policy with grants, and set `AGENT_AUTOFILL_HOME`. No dialog is shown there.
 
+## Use from a server (Node library)
+
+For a service that drives its own headless browser (Playwright, Puppeteer) on a server,
+with no Chrome extension, MCP server or approval dialog. The service decides which sites
+each login may be filled on and passes them in; the library enforces them.
+
+```js
+import { createAutofill, unlockBitwarden } from 'agent-autofill/server';
+
+const session = await unlockBitwarden({            // once per process; keep the key in memory
+  server: 'https://vault.example.com',             // Vaultwarden or Bitwarden; optional
+  client_id, client_secret, password,              // e.g. from your secret store
+  appdata_dir: '/var/lib/myservice/bw',            // bw data folder for this service
+});
+const autofill = createAutofill({
+  vault: { type: 'bitwarden', collections: ['Test logins'], session, appdata_dir: '/var/lib/myservice/bw' },
+  audit: (event) => log.info(event),               // default: $AGENT_AUTOFILL_HOME/audit.log
+});
+
+const cdp = await page.context().newCDPSession(page);   // Playwright
+const r = await autofill.fillLogin({
+  login: 'staging admin',                          // vault item id or exact name
+  origins: ['https://staging.example.com'],        // where it may be filled; "*" and "https://*" are refused
+  session: cdp,                                    // or cdp: { endpoint: 'http://127.0.0.1:9222', target_id }
+  fields: { username: 'auto', password: 'auto' },  // or CSS selectors; totp: 'auto' types the current code
+  submit: true,
+  context: { run_id },                             // extra audit fields, no secrets
+});
+// r = { ok: true, login, origin, filled: ['username', 'password'], submitted: true }
+```
+
+- The page's origin comes from the browser and must match `origins` before anything is read from the vault.
+- The fill runs in an isolated world and checks the origin again inside the page.
+- Results and audit events carry field names, never values. Refused fills are audited too.
+- `listLogins()` returns names, sites and which fields exist, without values.
+- `unlockBitwarden` passes the API key and password to `bw` in environment variables, never arguments.
+  Scope the vault to a folder or collection that holds only the test logins.
+
 ## Safeguards
 
 - Secrets are never in a tool result (asserted by the tests), and the audit log (`audit.log`) records login, origin and result only.

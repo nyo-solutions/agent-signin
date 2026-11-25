@@ -4,6 +4,10 @@
   "private": true,
   "description": "MCP tool that fills user-approved vault logins into browser pages without the AI agent seeing the secrets",
   "type": "module",
+  "exports": {
+    "./server": "./lib/server.js",
+    "./package.json": "./package.json"
+  },
   "engines": {
     "node": ">=22"
   },
