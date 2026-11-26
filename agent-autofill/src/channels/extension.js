@@ -7,6 +7,19 @@ import path from 'node:path';
 import { RUN_DIR } from '../paths.js';
 import { fillAcrossFrames, hasFrames } from './frames.js';
 
+// The extension version shipped next to this server. An unpacked extension keeps
+// running its old code until Chrome reloads it, so the server checks.
+const BUNDLED = JSON.parse(fs.readFileSync(new URL('../../extension/manifest.json', import.meta.url), 'utf8')).version;
+const parts = (v) => String(v || '0').split('.').map((n) => Number(n) || 0);
+export function older(a, b) {
+  const [x, y] = [parts(a), parts(b)];
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0);
+  return false;
+}
+const outdated = (profile, version, need, what) => new Error(
+  `Agent Autofill in Chrome profile ${profile} is version ${version || 'unknown'}; ${what} needs ${need} or later. ` +
+    'Reload it once at chrome://extensions (the circular arrow on Agent Autofill), then try again; later updates reload automatically.');
+
 const NOT_CONNECTED = 'Chrome extension is not connected: open Chrome with the Agent Autofill extension enabled (run `agent-autofill doctor`)';
 
 function request(socketPath, msg, timeoutMs = 20_000) {
@@ -37,7 +50,7 @@ export async function connectedProfiles({ runDir = RUN_DIR } = {}) {
     const p = path.join(runDir, n);
     try {
       const info = await request(p, { op: 'ping' }, 3000);
-      return { profile: profileOf(p), socket: p, version: info.version };
+      return { profile: profileOf(p), socket: p, version: info.version, canReload: Boolean(info.can_reload) };
     } catch (e) {
       if (e.code === 'ECONNREFUSED' || e.code === 'ENOENT') { try { fs.unlinkSync(p); } catch {} }
       return null;
@@ -55,8 +68,21 @@ export async function extensionRequest(msg, opts = {}) {
 const originOf = (u) => { try { return new URL(u).origin; } catch { return 'unknown'; } };
 
 // Find the tab across all connected profiles.
+// Reload extensions whose files on disk are newer than what Chrome runs (when they can).
+async function refresh(profiles, opts) {
+  const stale = profiles.filter((p) => p.canReload && older(p.version, BUNDLED));
+  if (!stale.length) return profiles;
+  await Promise.all(stale.map((p) => request(p.socket, { op: 'reload' }, 3000).catch(() => {})));
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    const now = await connectedProfiles(opts);
+    if (stale.every((p) => now.some((n) => n.profile === p.profile && !older(n.version, BUNDLED)))) return now;
+  }
+  return connectedProfiles(opts);
+}
+
 export async function chromeTarget(target, opts = {}) {
-  let profiles = await connectedProfiles(opts);
+  let profiles = await refresh(await connectedProfiles(opts), opts);
   if (!profiles.length) throw new Error(NOT_CONNECTED);
   if (target.profile) {
     profiles = profiles.filter((p) => p.profile === target.profile);
@@ -65,7 +91,7 @@ export async function chromeTarget(target, opts = {}) {
   const results = await Promise.all(profiles.map(async (p) => {
     try {
       const r = await request(p.socket, { op: 'resolve_tab', tab_id: target.tab_id, url_contains: target.url_contains });
-      return { ...r, profile: p.profile, socket: p.socket };
+      return { ...r, profile: p.profile, socket: p.socket, version: p.version };
     } catch (e) {
       return { error: e.message, profile: p.profile };
     }
@@ -98,6 +124,7 @@ export async function chromeFill(tab, req) {
     ...(frame && { frame_id: frame.ref, frame_origin: frame.origin }),
   });
   if (!hasFrames(req)) return one(req);
+  if (older(tab.version, '0.6.0')) throw outdated(tab.profile, tab.version, '0.6.0', 'filling inside payment iframes');
   const frames = (await request(tab.socket, { op: 'frames', tab_id: tab.tab_id, expected_origin: req.expectedOrigin }))
     .map((f) => ({ ref: f.frame_id, origin: f.origin, top: f.frame_id === 0 }));
   return fillAcrossFrames(frames, (frame, r) => one(r, frame), req);

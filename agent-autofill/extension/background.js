@@ -61,7 +61,11 @@ async function checkTab(msg) {
 async function handle(msg) {
   switch (msg.op) {
     case 'ping':
-      return { version: chrome.runtime.getManifest().version };
+      return { version: chrome.runtime.getManifest().version, can_reload: true };
+    case 'reload':
+      // The host saw newer extension files on disk (unpacked install): pick them up.
+      setTimeout(() => chrome.runtime.reload(), 100);
+      return { reloading: true };
     case 'resolve_tab': {
       const tab = await resolveTab(msg);
       const win = await chrome.windows.get(tab.windowId).catch(() => null);
