@@ -58,6 +58,11 @@ export class VaultStack extends Stack {
         ICON_SERVICE: "internal",
         ENABLE_DB_WAL: "false", // SQLite WAL is unsafe on network filesystems
         IP_HEADER: "X-Forwarded-For",
+        // Lambda pauses an instance as soon as it answers. Vaultwarden's background jobs (purges,
+        // notifications) could be paused mid-write and keep the shared SQLite file on EFS locked
+        // ("database is locked" on account creation). Without the scheduler, writes only happen
+        // inside requests, which finish before the pause.
+        JOB_POLL_INTERVAL_MS: "0",
         LOG_LEVEL: "debug", // diagnostics: some logins hang until timeout (2026-11-06); back to "warn" once explained
         // No ADMIN_TOKEN => /admin is disabled.
       },
