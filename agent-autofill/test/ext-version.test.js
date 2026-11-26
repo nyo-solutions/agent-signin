@@ -47,7 +47,7 @@ test('an old extension without reload: clear message instead of "unknown op fram
   assert.equal(tab.version, '0.5.0');
   assert.ok(!state.ops.includes('reload'));
   const req = { expectedOrigin: 'https://shop.example', mode: 'details', frameOrigins: { card: ['https://pay.example'] }, fields: [{ kind: 'card_number', group: 'card', selector: 'auto' }] };
-  await assert.rejects(chromeFill(tab, req), /version 0\.5\.0; filling inside payment iframes needs 0\.6\.0.*chrome:\/\/extensions/);
+  await assert.rejects(chromeFill(tab, req), /version 0\.5\.0\); filling inside payment iframes needs 0\.6\.0.*chrome:\/\/extensions/);
   assert.ok(!state.ops.includes('frames'));
 });
 
@@ -59,4 +59,14 @@ test('an extension that can reload is reloaded to the files on disk', async (t) 
   const tab = await chromeTarget({ type: 'chrome', tab_id: 7 }, { runDir });
   assert.ok(state.ops.includes('reload'));
   assert.equal(tab.version, BUNDLED);
+});
+
+test('same version number but older code: "unknown op" becomes a reload instruction', async (t) => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-ver-'));
+  const state = { version: '0.6.0', ops: [] };
+  const srv = await fakeProfile(runDir, 'p3', state);
+  t.after(() => srv.close());
+  const tab = await chromeTarget({ type: 'chrome', tab_id: 7 }, { runDir });
+  const req = { expectedOrigin: 'https://shop.example', mode: 'details', frameOrigins: { card: ['https://pay.example'] }, fields: [{ kind: 'card_number', group: 'card', selector: 'auto' }] };
+  await assert.rejects(chromeFill(tab, req), /runs older code.*"frames" step.*chrome:\/\/extensions/);
 });
